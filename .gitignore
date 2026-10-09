@@ -1,0 +1,21 @@
+# macOS
+.DS_Store
+
+# SwiftPM / Xcode
+.build/
+.swiftpm/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+
+# Python worker
+.venv/
+__pycache__/
+
+# Generated media & models
+Fixtures/*
+!Fixtures/README.md
+Spikes/out/
+models/
+*.gguf
+*.bin
