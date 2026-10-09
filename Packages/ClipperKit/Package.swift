@@ -21,7 +21,7 @@ let package = Package(
         // Pure model: timeline, templates, edit commands, analysis artifacts. Foundation only.
         .target(name: "ClipperCore"),
         // Pure draft passes: (assets + analysis + template + settings) → Timeline. No I/O.
-        .target(name: "ClipperAutomation", dependencies: ["ClipperCore"], resources: [.copy("Resources")]),
+        .target(name: "ClipperAutomation", dependencies: ["ClipperCore"]),
         // AVFoundation/Metal: probe, composition builder, compositor, text, export, loudness, scheduling.
         .target(name: "ClipperEngine", dependencies: ["ClipperCore"]),
         // Speech, Vision, DSP analyzers producing ClipperCore artifacts.

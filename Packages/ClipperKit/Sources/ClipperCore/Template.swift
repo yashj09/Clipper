@@ -23,6 +23,9 @@ public enum SlotFill: String, Codable, Sendable {
     case loop
     /// One clip, for the whole duration, not looped.
     case single
+    /// Mirrors the primary slot's cuts using the same source time ranges (a separately recorded but synced
+    /// source, e.g. an OBS facecam next to gameplay), so cutting the commentary keeps both in sync.
+    case linked
 }
 
 public enum ReframeMode: String, Codable, Sendable {
@@ -43,11 +46,18 @@ public struct Slot: Codable, Sendable, Equatable {
     /// Whether this slot's audio is used (speech) and drives silence cutting.
     public var useAudio: Bool
     public var audioGain: Double
+    /// Layout to use when this is the only visual slot that received clips (e.g. gameplay goes full-frame
+    /// when there is no facecam).
+    public var aloneTransform: Transform?
+    /// Optional slots may stay empty without a warning.
+    public var optional: Bool
 
     public init(id: String, name: String, role: SlotRole, fill: SlotFill = .sequence, transform: Transform = .fullFrame,
-                reframe: ReframeMode = .none, useAudio: Bool = true, audioGain: Double = 0) {
+                reframe: ReframeMode = .none, useAudio: Bool = true, audioGain: Double = 0,
+                aloneTransform: Transform? = nil, optional: Bool = false) {
         self.id = id; self.name = name; self.role = role; self.fill = fill; self.transform = transform
         self.reframe = reframe; self.useAudio = useAudio; self.audioGain = audioGain
+        self.aloneTransform = aloneTransform; self.optional = optional
     }
 }
 
@@ -132,11 +142,14 @@ public struct Rules: Codable, Sendable, Equatable {
     public var captions: CaptionRule?
     public var duck: DuckRule?
     public var loudnessTarget: Double?
+    /// Clips without speech are trimmed to at most this long (their middle), e.g. travel B-roll.
+    public var maxSilentClip: Double?
 
     public init(maxDuration: Double? = nil, silenceCut: SilenceCutRule? = nil, beatCut: BeatCutRule? = nil,
-                punchIn: PunchInRule? = nil, captions: CaptionRule? = nil, duck: DuckRule? = nil, loudnessTarget: Double? = -14) {
+                punchIn: PunchInRule? = nil, captions: CaptionRule? = nil, duck: DuckRule? = nil, loudnessTarget: Double? = -14,
+                maxSilentClip: Double? = nil) {
         self.maxDuration = maxDuration; self.silenceCut = silenceCut; self.beatCut = beatCut; self.punchIn = punchIn
-        self.captions = captions; self.duck = duck; self.loudnessTarget = loudnessTarget
+        self.captions = captions; self.duck = duck; self.loudnessTarget = loudnessTarget; self.maxSilentClip = maxSilentClip
     }
 }
 
