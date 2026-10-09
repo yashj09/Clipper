@@ -206,3 +206,22 @@ func talkingInput(seed: UInt64 = 7, title: String? = "Local editing in 60s") -> 
         #expect(Captions.isEmphasis("60") && Captions.isEmphasis("wow!") && !Captions.isEmphasis("hello"))
     }
 }
+
+@Suite struct MusicCatalogTests {
+    @Test func moodMapping() {
+        #expect(Mood.fromIncompetech(feel: "Relaxed, Bright") == ["chill", "happy", "upbeat"])
+        #expect(Mood.fromIncompetech(feel: "Ren Faire, Medieval").isEmpty)
+        for t in BuiltIns.templates { for m in t.music.moods { #expect(Mood.canonical.contains(m), "\(t.id): \(m)") } }
+    }
+
+    @Test(.enabled(if: FileManager.default.fileExists(atPath: "/tmp/pieces.json")))
+    func starterPackFromRealCatalog() throws {
+        let pieces = try IncompetechCatalog.decode(Data(contentsOf: URL(fileURLWithPath: "/tmp/pieces.json")))
+        let pack = IncompetechCatalog.starterPack(pieces)
+        #expect(pack.count == 24)
+        #expect(Set(pack.map(\.title)).count == 24)
+        #expect(pack.allSatisfy { (90...240).contains($0.seconds) })
+        #expect(IncompetechCatalog.starterPack(pieces).map(\.title) == pack.map(\.title))   // deterministic
+        print(pack.map { "\($0.title) [\($0.moods.joined(separator: ","))] \($0.bpm ?? "?") BPM" }.joined(separator: "\n"))
+    }
+}

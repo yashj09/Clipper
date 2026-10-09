@@ -65,7 +65,7 @@ public enum BuiltIns {
             s.position = NormPoint(0.5, 0.4)   // on the split line between facecam and gameplay
             return s
         }()],
-        music: MusicPolicy(moods: ["energetic", "electronic", "intense"], gain: -26))
+        music: MusicPolicy(moods: ["energetic", "intense"], minBPM: 100, maxBPM: 150, gain: -26))
 
     public static let montage = Template(
         id: "montage", name: "Montage", summary: "Clips cut on the beat of the music, no voice. Great for highlights and travel reels.",
@@ -82,7 +82,7 @@ public enum BuiltIns {
         elements: [title("title-clean", seconds: 3)],
         rules: Rules(maxDuration: 90, silenceCut: SilenceCutRule(minGap: 0.7, padBefore: 0.15, padAfter: 0.25),
                      captions: CaptionRule(style: "clean-subtitle"), duck: DuckRule(depth: 10), maxSilentClip: 4),
-        music: MusicPolicy(moods: ["inspiring", "chill", "happy", "cinematic"], gain: -18))
+        music: MusicPolicy(moods: ["inspiring", "chill", "happy", "cinematic"], minBPM: 70, maxBPM: 130, gain: -18))
 
     public static let templates: [Template] = [talkingHead, gameplay, montage, vlog]
 
