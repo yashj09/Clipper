@@ -21,6 +21,25 @@ public struct ExportResult: Sendable {
 /// Processes interleaved Float32 audio on its way to the encoder (gain, limiting). Stateful and streaming.
 public protocol AudioStage: Sendable {
     mutating func process(_ samples: inout [Float], channels: Int)
+    /// Delay the stage introduces (frames); output timestamps are shifted back by this to keep A/V sync.
+    var latencyFrames: Int { get }
+}
+
+extension AudioStage { public var latencyFrames: Int { 0 } }
+
+/// Loudness normalization: constant gain to reach the target, then a true-peak limiter to hold the ceiling.
+public struct LoudnessStage: AudioStage {
+    var gain: GainStage
+    var limiter: TruePeakLimiter
+    public init(gainDB: Double, ceilingDBTP: Double, sampleRate: Double = Exporter.audioSampleRate, channels: Int = Exporter.audioChannels) {
+        gain = GainStage(dB: gainDB)
+        limiter = TruePeakLimiter(sampleRate: sampleRate, channels: channels, ceilingDBTP: ceilingDBTP)
+    }
+    public mutating func process(_ samples: inout [Float], channels: Int) {
+        gain.process(&samples, channels: channels)
+        limiter.process(&samples)
+    }
+    public var latencyFrames: Int { limiter.latencyFrames }
 }
 
 /// Renders a timeline to a file through the same compositor as preview:
@@ -29,13 +48,43 @@ public enum Exporter {
     public static let audioSampleRate = 48_000.0
     public static let audioChannels = 2
 
+    /// Renders `timeline` with `preset`. When the preset has a loudness target, the mix is measured first
+    /// (BS.1770) and normalized with gain + true-peak limiting during the encode.
     public static func export(_ timeline: Timeline, assets: [AssetID: MediaAsset], preset: ExportPreset, to url: URL,
-                              audioStage: (any AudioStage)? = nil, appliedGain: Double? = nil,
                               progress: (@Sendable (ExportProgress) -> Void)? = nil) async throws -> ExportResult {
-        try await EncodeScheduler.shared.run(.foreground) {
-            try await render(timeline, assets: assets, preset: preset, to: url, audioStage: audioStage,
-                             appliedGain: appliedGain, progress: progress)
+        var stage: (any AudioStage)?
+        var applied: Double?
+        if let target = preset.loudness,
+           let measured = try await measureMix(timeline, assets: assets), measured.integrated > LoudnessMeter.silenceFloor + 1 {
+            let g = LoudnessNormalizer.gain(measured: measured, target: target, ceiling: preset.truePeak, limiterAvailable: true)
+            stage = LoudnessStage(gainDB: g, ceilingDBTP: preset.truePeak)
+            applied = g
         }
+        let s = stage, a = applied
+        return try await EncodeScheduler.shared.run(.foreground) {
+            try await render(timeline, assets: assets, preset: preset, to: url, audioStage: s, appliedGain: a, progress: progress)
+        }
+    }
+
+    /// Integrated loudness of the timeline's final audio mix (nil when it has no audio).
+    public static func measureMix(_ timeline: Timeline, assets: [AssetID: MediaAsset]) async throws -> LoudnessInfo? {
+        let built = try await CompositionBuilder.build(timeline, assets: assets)
+        let tracks = try await built.composition.loadTracks(withMediaType: .audio)
+        guard !tracks.isEmpty else { return nil }
+        let reader = try AVAssetReader(asset: built.composition)
+        reader.timeRange = CMTimeRange(start: .zero, duration: built.duration)
+        let out = AVAssetReaderAudioMixOutput(audioTracks: tracks, audioSettings: pcmSettings)
+        out.audioMix = built.audioMix
+        out.audioTimePitchAlgorithm = .spectral
+        reader.add(out)
+        guard reader.startReading() else { throw reader.error ?? CocoaError(.fileReadUnknown) }
+        var meter = LoudnessMeter(sampleRate: audioSampleRate, channels: audioChannels)
+        while let sb = out.copyNextSampleBuffer() {
+            try Task.checkCancellation()
+            meter.process(interleaved: AudioSampleBuffers.floats(sb))
+        }
+        if reader.status == .failed { throw reader.error ?? CocoaError(.fileReadUnknown) }
+        return meter.result()
     }
 
     static func outputSize(_ timeline: Timeline, _ preset: ExportPreset) -> CGSize {
@@ -208,7 +257,10 @@ final class StageBox: @unchecked Sendable {
 
     func apply(_ sb: CMSampleBuffer) -> CMSampleBuffer? {
         guard stage != nil else { return sb }
-        return AudioSampleBuffers.map(sb, channels: Exporter.audioChannels) { samples in stage!.process(&samples, channels: Exporter.audioChannels) }
+        let shift = CMTime(value: CMTimeValue(stage!.latencyFrames), timescale: CMTimeScale(Exporter.audioSampleRate))
+        return AudioSampleBuffers.map(sb, channels: Exporter.audioChannels, shiftBack: shift) { samples in
+            stage!.process(&samples, channels: Exporter.audioChannels)
+        }
     }
 }
 
@@ -223,7 +275,7 @@ public enum AudioSampleBuffers {
     }
 
     /// Returns a new sample buffer with the same format/timing and transformed samples.
-    public static func map(_ sb: CMSampleBuffer, channels: Int, _ body: (inout [Float]) -> Void) -> CMSampleBuffer? {
+    public static func map(_ sb: CMSampleBuffer, channels: Int, shiftBack: CMTime = .zero, _ body: (inout [Float]) -> Void) -> CMSampleBuffer? {
         var samples = floats(sb)
         body(&samples)
         guard let format = CMSampleBufferGetFormatDescription(sb) else { return nil }
@@ -236,7 +288,7 @@ public enum AudioSampleBuffers {
         var out: CMSampleBuffer?
         let frames = CMSampleBufferGetNumSamples(sb)
         guard CMAudioSampleBufferCreateReadyWithPacketDescriptions(allocator: nil, dataBuffer: block, formatDescription: format,
-                                                                   sampleCount: frames, presentationTimeStamp: CMSampleBufferGetPresentationTimeStamp(sb),
+                                                                   sampleCount: frames, presentationTimeStamp: CMSampleBufferGetPresentationTimeStamp(sb) - shiftBack,
                                                                    packetDescriptions: nil, sampleBufferOut: &out) == noErr else { return nil }
         return out
     }

@@ -334,6 +334,17 @@ enum Pixels {
         #expect(Double(result.frames) / result.seconds > 60, "export ran at \(Double(result.frames) / result.seconds) fps")
     }
 
+    @Test func exportIsLoudnessNormalized() async throws {
+        let (tl, assets) = try await makeShort()
+        let before = try #require(try await Exporter.measureMix(tl, assets: assets))
+        let url = Fixture.out("loud.mp4")
+        let result = try await Exporter.export(tl, assets: assets, preset: ExportPreset.named("shorts-1080x1920")!, to: url)
+        let after = try await AudioFileLoudness.measure(url: url)
+        print("loudness: mix \(before.integrated) LUFS → file \(after.integrated) LUFS, TP \(after.truePeak) dBTP, gain \(result.appliedGain ?? 0)")
+        #expect(abs(after.integrated - -14) < 0.5)
+        #expect(after.truePeak < -0.5)   // -1 dBTP ceiling; AAC adds a little overshoot
+    }
+
     @Test func alphaExportKeepsTransparency() async throws {
         var item = Item(range: TimeRange(seconds: 0, 1), content: .text(TextContent(text: "Overlay", style: "t")))
         item.transform.position = .constant(.center)
