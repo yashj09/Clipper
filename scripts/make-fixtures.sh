@@ -20,6 +20,15 @@ have overlay_1280x720_30.mov || ff \
   -f lavfi -i "testsrc=s=1280x720:r=30:d=10,hue=h=140:s=1.4" \
   -c:v h264_videotoolbox -q:v 75 -g 30 "$OUT/overlay_1280x720_30.mov"
 
+# Rotation check: 640×360 grey frame with a red marker in the natural top-left corner, tagged with an
+# iPhone-style display matrix (rotate 90° clockwise). Displayed upright, the marker must be top-right.
+if ! have rotated_marker.mov; then
+  ff -f lavfi -i "color=c=gray:s=640x360:r=30:d=3,drawbox=x=0:y=0:w=120:h=90:color=red:t=fill" \
+    -c:v h264_videotoolbox -q:v 70 "$OUT/tmp_marker.mov"
+  ff -display_rotation:v:0 -90 -i "$OUT/tmp_marker.mov" -c copy "$OUT/rotated_marker.mov"
+  rm -f "$OUT/tmp_marker.mov"
+fi
+
 # --- S2: HDR -------------------------------------------------------------------------------
 # 10-bit HEVC tagged as BT.2020 HLG / PQ. Top half: colour test pattern at moderate signal levels.
 # Bottom half: a black→full-scale signal ramp, so the highlights exercise the tone-mapping roll-off.

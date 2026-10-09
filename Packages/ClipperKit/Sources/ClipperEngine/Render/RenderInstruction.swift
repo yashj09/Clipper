@@ -1,0 +1,65 @@
+import AVFoundation
+import ClipperCore
+import simd
+
+/// Everything the compositor needs that is constant for a whole composition.
+public struct RenderContext: Sendable {
+    public var canvas: Canvas
+    public var styles: [String: TextStyle]
+    public var background: RGBA
+    /// Stable per-style fingerprints for the text texture cache (computed once, not per frame).
+    let styleHashes: [String: Int]
+    public init(canvas: Canvas, styles: [String: TextStyle], background: RGBA = .black) {
+        self.canvas = canvas; self.styles = styles; self.background = background
+        styleHashes = styles.mapValues { (try? ClipperJSON.encode($0)).map { $0.hashValue } ?? 0 }
+    }
+}
+
+/// One visual layer active during an instruction's time range (a timeline item, resolved for rendering).
+public struct RenderLayer: Sendable {
+    public enum Source: Sendable {
+        case media(trackID: CMPersistentTrackID, displaySize: SIMD2<Double>, orientation: Orientation, transfer: TransferFunction)
+        case image(URL, displaySize: SIMD2<Double>)
+        case text(TextContent)
+        case caption(CaptionContent)
+        case solid(RGBA)
+    }
+    public var itemID: ItemID
+    public var source: Source
+    public var transform: Transform
+    public var opacity: Param<Double>
+    /// Item placement on the timeline; keyframes are evaluated relative to `start`.
+    public var start: RationalTime
+    public var duration: RationalTime
+    public var fadeIn: RationalTime
+    public var fadeOut: RationalTime
+
+    /// Opacity including fades at item-relative time `t`.
+    public func effectiveOpacity(at t: RationalTime) -> Double {
+        var o = opacity.value(at: t)
+        if fadeIn > .zero { o *= min(max(t.seconds / fadeIn.seconds, 0), 1) }
+        if fadeOut > .zero { o *= min(max((duration - t).seconds / fadeOut.seconds, 0), 1) }
+        return o
+    }
+}
+
+/// A span of the composition with a constant set of layers (bottom → top).
+public final class RenderInstruction: NSObject, AVVideoCompositionInstructionProtocol, @unchecked Sendable {
+    public let timeRange: CMTimeRange
+    public let enablePostProcessing = false
+    public let containsTweening = true
+    public let requiredSourceTrackIDs: [NSValue]?
+    public let passthroughTrackID: CMPersistentTrackID = kCMPersistentTrackID_Invalid
+    public let layers: [RenderLayer]
+    public let context: RenderContext
+
+    public init(timeRange: CMTimeRange, layers: [RenderLayer], context: RenderContext) {
+        self.timeRange = timeRange
+        self.layers = layers
+        self.context = context
+        let ids = layers.compactMap { l -> CMPersistentTrackID? in
+            if case .media(let id, _, _, _) = l.source { id } else { nil }
+        }
+        requiredSourceTrackIDs = ids.isEmpty ? nil : ids.map { NSNumber(value: $0) }
+    }
+}

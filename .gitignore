@@ -19,3 +19,6 @@ Spikes/out/
 models/
 *.gguf
 *.bin
+
+# Claude Code agent worktrees
+.claude/

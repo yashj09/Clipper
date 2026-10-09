@@ -181,3 +181,8 @@ func gcd(_ a: Int64, _ b: Int64) -> Int64 {
     while b != 0 { (a, b) = (b, a % b) }
     return max(a, 1)
 }
+
+extension Duration {
+    /// Seconds as a Double (for timing and progress reporting).
+    public var seconds: Double { Double(components.seconds) + Double(components.attoseconds) / 1e18 }
+}
