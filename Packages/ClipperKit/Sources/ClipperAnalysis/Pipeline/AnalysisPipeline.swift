@@ -1,5 +1,6 @@
 import ClipperCore
 import ClipperEngine
+import CryptoKit
 import Foundation
 
 public enum AnalysisKind: String, Sendable, CaseIterable, Codable {
@@ -290,8 +291,14 @@ public struct DirectoryAnalysisCache: AnalysisCache {
     public init(directory: URL) { self.directory = directory }
 
     public func fileURL(key: AssetKey, analyzer: String, version: Int) -> URL {
-        let safe = { (s: String) in
-            String(s.map { $0 == "/" || $0 == ":" || $0 == "\\" ? "_" : $0 })
+        // Path components must never resolve outside `directory`: separators are replaced, and anything that is
+        // empty, "." / "..", or contains NUL is replaced by its SHA-256 (keys are normally hex content hashes anyway).
+        let safe = { (s: String) -> String in
+            let swept = String(s.map { $0 == "/" || $0 == ":" || $0 == "\\" ? "_" : $0 })
+            if swept.isEmpty || swept == "." || swept == ".." || swept.contains("\0") || swept.hasPrefix(".") {
+                return SHA256.hash(data: Data(s.utf8)).map { String(format: "%02x", $0) }.joined()
+            }
+            return swept
         }
         return directory.appendingPathComponent(safe(key.rawValue), isDirectory: true)
             .appendingPathComponent("\(safe(analyzer))@\(version).json")

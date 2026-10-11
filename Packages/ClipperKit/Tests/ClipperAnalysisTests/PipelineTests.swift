@@ -543,3 +543,16 @@ private final class CountingCache: AnalysisCache {
         #expect(a.transcript == nil && a.speech == nil)
     }
 }
+
+@Suite struct CachePathSafetyTests {
+    @Test func cachePathsStayInsideDirectory() {
+        let dir = URL(fileURLWithPath: "/tmp/clipper-cache-test", isDirectory: true)
+        let cache = DirectoryAnalysisCache(directory: dir)
+        for key in ["..", ".", "", "../../etc", ".hidden", "a/../../b"] {
+            for analyzer in ["..", "speech", "../x"] {
+                let url = cache.fileURL(key: AssetKey(key), analyzer: analyzer, version: 1).standardizedFileURL
+                #expect(url.path.hasPrefix(dir.path + "/"), "\(key) / \(analyzer) → \(url.path)")
+            }
+        }
+    }
+}

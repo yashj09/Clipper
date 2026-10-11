@@ -1,0 +1,235 @@
+import ClipperAutomation
+import ClipperCore
+import ClipperEngine
+import SwiftUI
+import UniformTypeIdentifiers
+
+struct MainView: View {
+    @Bindable var model: AppModel
+
+    var body: some View {
+        NavigationSplitView {
+            List(selection: $model.section) {
+                Section("Library") {
+                    Label("Media (\(model.assets.count))", systemImage: "film.stack").tag(AppModel.Section.media)
+                    Label("Music (\(model.music.count))", systemImage: "music.note.list").tag(AppModel.Section.music)
+                    Label("Templates", systemImage: "rectangle.3.group").tag(AppModel.Section.templates)
+                }
+                Section("Projects") {
+                    ForEach(model.projects) { p in
+                        Label(p.name, systemImage: "film").tag(AppModel.Section.project(p.id))
+                            .contextMenu { Button("Delete Project", role: .destructive) { model.delete(p.id) } }
+                    }
+                }
+            }
+            .navigationSplitViewColumnWidth(min: 190, ideal: 220)
+            .onChange(of: model.section) { _, s in
+                if case .project(let id) = s, model.editor?.project.id != id { model.open(id) }
+            }
+        } detail: {
+            Group {
+                switch model.section {
+                case .media: MediaGridView(model: model)
+                case .music: MusicListView(model: model)
+                case .templates: TemplatesView(model: model)
+                case .project:
+                    if let editor = model.editor { EditorView(model: model, editor: editor) } else { ProgressView() }
+                }
+            }
+            .overlay(alignment: .bottom) { if let a = model.activity { ActivityBar(activity: a) } }
+        }
+        .sheet(item: Binding(get: { model.draftSheet.map(DraftSheetItem.init) }, set: { model.draftSheet = $0?.ids })) { item in
+            DraftSheet(model: model, initial: item.ids)
+        }
+        .sheet(isPresented: $model.exportSheet) { ExportSheet(model: model) }
+        .alert("Clipper", isPresented: Binding(get: { model.alert != nil }, set: { if !$0 { model.alert = nil } })) {
+            Button("OK") { model.alert = nil }
+        } message: { Text(model.alert ?? "") }
+        .overlay { if let e = model.libraryError { Text(e).padding().background(.red.opacity(0.2)) } }
+    }
+}
+
+struct DraftSheetItem: Identifiable {
+    let ids: [AssetID]
+    var id: String { ids.map(\.uuidString).joined() }
+}
+
+struct ActivityBar: View {
+    let activity: Activity
+    var body: some View {
+        HStack(spacing: 10) {
+            if let p = activity.progress { ProgressView(value: p).frame(width: 140) } else { ProgressView().controlSize(.small) }
+            Text(activity.title).bold()
+            Text(activity.detail).foregroundStyle(.secondary).lineLimit(1)
+        }
+        .padding(.horizontal, 14).padding(.vertical, 8)
+        .background(.regularMaterial, in: Capsule())
+        .padding(12)
+    }
+}
+
+// MARK: - Media
+
+struct MediaGridView: View {
+    @Bindable var model: AppModel
+    @State private var selection = Set<AssetID>()
+    @State private var dropTargeted = false
+
+    var body: some View {
+        ScrollView {
+            if model.assets.isEmpty {
+                ContentUnavailableView("No media yet", systemImage: "square.and.arrow.down",
+                                       description: Text("Drop clips here or click Import. Files stay where they are; Clipper references them."))
+                    .padding(.top, 80)
+            }
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 170), spacing: 12)], spacing: 12) {
+                ForEach(model.assets) { asset in
+                    MediaCard(asset: asset, selected: selection.contains(asset.id))
+                        .onTapGesture {
+                            if NSEvent.modifierFlags.contains(.command) || NSEvent.modifierFlags.contains(.shift) {
+                                if selection.contains(asset.id) { selection.remove(asset.id) } else { selection.insert(asset.id) }
+                            } else { selection = [asset.id] }
+                        }
+                        .draggable(asset.id.uuidString)
+                }
+            }
+            .padding(16)
+        }
+        .background(dropTargeted ? Color.accentColor.opacity(0.08) : .clear)
+        .dropDestination(for: URL.self) { urls, _ in
+            Task { await model.importFiles(urls) }
+            return true
+        } isTargeted: { dropTargeted = $0 }
+        .toolbar {
+            ToolbarItem { Button { model.chooseAndImport() } label: { Label("Import", systemImage: "plus") } }
+            ToolbarItem {
+                Button {
+                    model.draftSheet = model.assets.filter { selection.contains($0.id) }.map(\.id)
+                } label: { Label("New Draft", systemImage: "wand.and.stars") }
+                    .help("Create an automatic draft from the selected clips")
+            }
+        }
+        .navigationTitle("Media")
+    }
+}
+
+struct MediaCard: View {
+    let asset: MediaAsset
+    let selected: Bool
+    @State private var thumb: CGImage?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ZStack {
+                Color.black
+                if let thumb { Image(decorative: thumb, scale: 1).resizable().aspectRatio(contentMode: .fit) }
+                else if asset.info.kind == .audio { Image(systemName: "waveform").font(.largeTitle).foregroundStyle(.secondary) }
+            }
+            .frame(height: 100)
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .overlay(RoundedRectangle(cornerRadius: 6).stroke(selected ? Color.accentColor : .clear, lineWidth: 3))
+            Text(asset.name).font(.callout).lineLimit(1)
+            HStack(spacing: 6) {
+                Text(String(format: "%.1fs", asset.info.duration.seconds))
+                if asset.info.hasVideo { Text("\(asset.info.displayWidth)×\(asset.info.displayHeight)") }
+                if asset.info.transfer != .sdr { Text(asset.info.transfer.rawValue.uppercased()).foregroundStyle(.orange) }
+                if asset.info.isVFR { Text("VFR") }
+            }
+            .font(.caption).foregroundStyle(.secondary)
+        }
+        .task(id: asset.id) {
+            guard asset.info.hasVideo else { return }
+            thumb = await Thumbnailer.shared.thumbnail(asset.renderURL, at: min(1, asset.info.duration.seconds / 2), height: 200)
+        }
+    }
+}
+
+// MARK: - Music and templates
+
+struct MusicListView: View {
+    @Bindable var model: AppModel
+    var body: some View {
+        Table(model.music) {
+            TableColumn("Title", value: \.title)
+            TableColumn("Artist", value: \.artist)
+            TableColumn("BPM") { Text($0.bpm.map { String(format: "%.0f", $0) } ?? "–") }.width(50)
+            TableColumn("Length") { Text(String(format: "%d:%02d", Int($0.duration) / 60, Int($0.duration) % 60)) }.width(60)
+            TableColumn("Moods") { Text($0.moods.joined(separator: ", ")) }
+            TableColumn("Licence") { t in
+                switch t.license { case .ccBy: Text("CC BY"); case .cc0: Text("CC0"); case .owned: Text("Own"); case .generated: Text("Generated") }
+            }.width(70)
+        }
+        .overlay {
+            if model.music.isEmpty {
+                ContentUnavailableView {
+                    Label("No music yet", systemImage: "music.note")
+                } description: {
+                    Text("Get 24 free tracks (Kevin MacLeod, CC BY 4.0; credits are added to each project automatically), or add your own with `clipper music add`.")
+                } actions: {
+                    Button("Download free starter pack") { Task { await model.addStarterPack() } }
+                }
+            }
+        }
+        .navigationTitle("Music")
+    }
+}
+
+struct TemplatesView: View {
+    @Bindable var model: AppModel
+    var body: some View {
+        List(model.templates) { t in
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text(t.name).font(.headline)
+                    Text("\(t.canvas.width)×\(t.canvas.height) @ \(t.canvas.frameRate)").font(.caption).foregroundStyle(.secondary)
+                }
+                Text(t.summary).font(.callout).foregroundStyle(.secondary)
+                Text("Slots: " + t.slots.map(\.name).joined(separator: ", ") + (t.rules.captions.map { " · captions: \($0.style)" } ?? ""))
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            .padding(.vertical, 4)
+        }
+        .navigationTitle("Templates")
+    }
+}
+
+// MARK: - Editor
+
+struct EditorView: View {
+    @Bindable var model: AppModel
+    @Bindable var editor: EditorModel
+    @State private var zoom: TimelineView.ZoomRequest? = .fit(UUID())
+    @Environment(\.undoManager) private var undoManager
+
+    var body: some View {
+        VSplitView {
+            HSplitView {
+                ViewerView(editor: editor).frame(minWidth: 360, minHeight: 300)
+                InspectorView(editor: editor).frame(minWidth: 260, idealWidth: 300, maxWidth: 380)
+            }
+            TimelineView(editor: editor, zoomRequest: zoom).frame(minHeight: 220, idealHeight: 320)
+        }
+        .onAppear { editor.undoManager = undoManager }
+        .navigationTitle(editor.project.name)
+        .toolbar {
+            ToolbarItemGroup {
+                Button { editor.undo() } label: { Label("Undo", systemImage: "arrow.uturn.backward") }.disabled(!editor.history.canUndo)
+                    .help(editor.history.undoName.map { "Undo \($0)" } ?? "Undo")
+                Button { editor.redo() } label: { Label("Redo", systemImage: "arrow.uturn.forward") }.disabled(!editor.history.canRedo)
+                Button { editor.bladeAtPlayhead() } label: { Label("Split", systemImage: "scissors") }.help("Split at playhead (B)")
+                Button { editor.deleteSelection(ripple: model.settings.editing.rippleByDefault) } label: { Label("Delete", systemImage: "trash") }
+                    .disabled(editor.selection.isEmpty)
+                Toggle(isOn: Binding(get: { model.settings.editing.rippleByDefault }, set: { model.settings.editing.rippleByDefault = $0; model.saveSettings() })) {
+                    Label("Ripple", systemImage: "arrow.left.and.right.righttriangle.left.righttriangle.right")
+                }.help("Ripple edits close gaps (hold ⌥ while trimming to invert)")
+                Toggle(isOn: Binding(get: { model.settings.editing.snapping }, set: { model.settings.editing.snapping = $0; model.saveSettings() })) {
+                    Label("Snap", systemImage: "arrow.right.to.line")
+                }
+                Button { zoom = .zoomOut(UUID()) } label: { Label("Zoom Out", systemImage: "minus.magnifyingglass") }
+                Button { zoom = .fit(UUID()) } label: { Label("Fit", systemImage: "arrow.left.and.right") }
+                Button { zoom = .zoomIn(UUID()) } label: { Label("Zoom In", systemImage: "plus.magnifyingglass") }
+                Button { model.exportSheet = true } label: { Label("Export", systemImage: "square.and.arrow.up") }
+            }
+        }
+    }
+}

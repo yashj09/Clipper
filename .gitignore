@@ -22,3 +22,7 @@ models/
 
 # Claude Code agent worktrees
 .claude/
+
+# Generated Xcode project and build products
+App/Clipper.xcodeproj/
+App/build/

@@ -1,0 +1,45 @@
+# XcodeGen spec: `cd App && xcodegen` regenerates Clipper.xcodeproj (gitignored).
+name: Clipper
+options:
+  bundleIdPrefix: dev.yashjain
+  deploymentTarget:
+    macOS: "26.0"
+  createIntermediateGroups: true
+packages:
+  ClipperKit:
+    path: ../Packages/ClipperKit
+targets:
+  Clipper:
+    type: application
+    platform: macOS
+    sources: [Clipper]
+    dependencies:
+      - package: ClipperKit
+        products: [ClipperCore, ClipperEngine, ClipperAnalysis, ClipperAutomation, ClipperLibrary]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.yashjain.Clipper
+        PRODUCT_NAME: Clipper
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_VERSION: "6.0"
+        SWIFT_STRICT_CONCURRENCY: complete
+        MACOSX_DEPLOYMENT_TARGET: "26.0"
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: Clipper
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.video
+        INFOPLIST_KEY_NSHumanReadableCopyright: "Personal project"
+        INFOPLIST_KEY_NSSpeechRecognitionUsageDescription: "Clipper transcribes your clips on-device to cut pauses and add captions."
+        # Personal, local build: ad-hoc signed, not sandboxed (media lives anywhere on disk).
+        CODE_SIGN_IDENTITY: "-"
+        CODE_SIGN_STYLE: Manual
+        ENABLE_HARDENED_RUNTIME: NO
+        ENABLE_APP_SANDBOX: NO
+        DEAD_CODE_STRIPPING: YES
+schemes:
+  Clipper:
+    build:
+      targets:
+        Clipper: all
+    run:
+      config: Debug

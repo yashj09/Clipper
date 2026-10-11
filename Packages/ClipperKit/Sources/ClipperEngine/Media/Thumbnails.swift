@@ -20,7 +20,11 @@ public actor Thumbnailer {
         let key = "\(url.path)|\(q)|\(height)"
         if let hit = cache[key] { return hit }
         let gen = generator(url, height: height)
-        let image = try? await gen.image(at: CMTime(seconds: q, preferredTimescale: 600)).image
+        let image: CGImage? = await withCheckedContinuation { cont in
+            gen.generateCGImageAsynchronously(for: CMTime(seconds: q, preferredTimescale: 600)) { image, _, _ in
+                cont.resume(returning: image)
+            }
+        }
         if let image {
             cache[key] = image
             order.append(key)
