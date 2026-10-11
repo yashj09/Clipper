@@ -17,6 +17,13 @@ public struct ClipperSettings: Codable, Sendable, Equatable {
         public var previewScale = 0.5
         public var useProxies = true
         public init() {}
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self), d = Editing()
+            rippleByDefault = c.value(.rippleByDefault, d.rippleByDefault)
+            snapping = c.value(.snapping, d.snapping)
+            previewScale = c.value(.previewScale, d.previewScale)
+            useProxies = c.value(.useProxies, d.useProxies)
+        }
     }
 
     public struct Automation: Codable, Sendable, Equatable {
@@ -35,17 +42,16 @@ public struct ClipperSettings: Codable, Sendable, Equatable {
 
         // Tolerant decoding so settings files from older versions keep loading.
         public init(from decoder: Decoder) throws {
-            let c = try decoder.container(keyedBy: CodingKeys.self)
-            let d = Automation()
-            defaultTemplate = (try? c.decode(String.self, forKey: .defaultTemplate)) ?? d.defaultTemplate
-            captions = (try? c.decode(Bool.self, forKey: .captions)) ?? d.captions
-            music = (try? c.decode(Bool.self, forKey: .music)) ?? d.music
-            transcriptionLocale = (try? c.decode(String.self, forKey: .transcriptionLocale)) ?? d.transcriptionLocale
-            transcriber = (try? c.decode(String.self, forKey: .transcriber)) ?? d.transcriber
-            faceTracking = (try? c.decode(Bool.self, forKey: .faceTracking)) ?? d.faceTracking
-            useLLM = (try? c.decode(Bool.self, forKey: .useLLM)) ?? d.useLLM
-            llmBaseURL = (try? c.decode(String.self, forKey: .llmBaseURL)) ?? d.llmBaseURL
-            llmModel = (try? c.decode(String.self, forKey: .llmModel)) ?? d.llmModel
+            let c = try decoder.container(keyedBy: CodingKeys.self), d = Automation()
+            defaultTemplate = c.value(.defaultTemplate, d.defaultTemplate)
+            captions = c.value(.captions, d.captions)
+            music = c.value(.music, d.music)
+            transcriptionLocale = c.value(.transcriptionLocale, d.transcriptionLocale)
+            transcriber = c.value(.transcriber, d.transcriber)
+            faceTracking = c.value(.faceTracking, d.faceTracking)
+            useLLM = c.value(.useLLM, d.useLLM)
+            llmBaseURL = c.value(.llmBaseURL, d.llmBaseURL)
+            llmModel = c.value(.llmModel, d.llmModel)
         }
     }
 
@@ -56,6 +62,13 @@ public struct ClipperSettings: Codable, Sendable, Equatable {
         public var fileNamePattern = "{project} - {timeline}"
         public var writeSidecars = true
         public init() {}
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self), d = Export()
+            defaultPreset = c.value(.defaultPreset, d.defaultPreset)
+            outputFolder = try? c.decodeIfPresent(URL.self, forKey: .outputFolder)
+            fileNamePattern = c.value(.fileNamePattern, d.fileNamePattern)
+            writeSidecars = c.value(.writeSidecars, d.writeSidecars)
+        }
     }
 
     public struct Music: Codable, Sendable, Equatable {
@@ -63,11 +76,20 @@ public struct ClipperSettings: Codable, Sendable, Equatable {
         public var folders: [URL] = []
         public var includeBundledLibrary = true
         public init() {}
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self), d = Music()
+            folders = c.value(.folders, d.folders)
+            includeBundledLibrary = c.value(.includeBundledLibrary, d.includeBundledLibrary)
+        }
     }
 
     public struct Integrations: Codable, Sendable, Equatable {
         public var watchFolders: [URL] = []
         public init() {}
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            watchFolders = c.value(.watchFolders, [])
+        }
     }
 
     public var editing = Editing()
@@ -87,4 +109,9 @@ public struct ClipperSettings: Codable, Sendable, Equatable {
         music = (try? c.decode(Music.self, forKey: .music)) ?? Music()
         integrations = (try? c.decode(Integrations.self, forKey: .integrations)) ?? Integrations()
     }
+}
+
+extension KeyedDecodingContainer {
+    /// Decodes `key`, falling back to `fallback` when it is missing or has the wrong type (forward-compatible settings).
+    func value<T: Decodable>(_ key: Key, _ fallback: T) -> T { ((try? decodeIfPresent(T.self, forKey: key)) ?? nil) ?? fallback }
 }
