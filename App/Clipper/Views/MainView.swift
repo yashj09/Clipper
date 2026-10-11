@@ -42,6 +42,7 @@ struct MainView: View {
             DraftSheet(model: model, initial: item.ids)
         }
         .sheet(isPresented: $model.exportSheet) { ExportSheet(model: model) }
+        .sheet(item: $model.highlightSession) { session in HighlightsSheet(model: model, session: session) }
         .alert("Clipper", isPresented: Binding(get: { model.alert != nil }, set: { if !$0 { model.alert = nil } })) {
             Button("OK") { model.alert = nil }
         } message: { Text(model.alert ?? "") }
@@ -91,6 +92,12 @@ struct MediaGridView: View {
                             } else { selection = [asset.id] }
                         }
                         .draggable(asset.id.uuidString)
+                        .contextMenu {
+                            Button("New Draft…") { model.draftSheet = [asset.id] }
+                            if asset.info.duration.seconds > 90 {
+                                Button("Find Highlights…") { Task { await model.findHighlights(asset) } }
+                            }
+                        }
                 }
             }
             .padding(16)
@@ -212,6 +219,14 @@ struct EditorView: View {
         .onAppear { editor.undoManager = undoManager }
         .navigationTitle(editor.project.name)
         .toolbar {
+            ToolbarItem(placement: .navigation) {
+                if editor.project.timelines.count > 1 {
+                    Picker("Short", selection: Binding(get: { editor.timelineIndex }, set: { editor.selectTimeline($0) })) {
+                        ForEach(editor.project.timelines.indices, id: \.self) { Text(editor.project.timelines[$0].name).tag($0) }
+                    }
+                    .frame(maxWidth: 280)
+                }
+            }
             ToolbarItemGroup {
                 Button { editor.undo() } label: { Label("Undo", systemImage: "arrow.uturn.backward") }.disabled(!editor.history.canUndo)
                     .help(editor.history.undoName.map { "Undo \($0)" } ?? "Undo")

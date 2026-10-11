@@ -12,13 +12,16 @@ Each phase has an exit test. We don't start the next phase until the current one
 - [x] S5 Long media: seeking to a frame takes 28 ms on the original and 4 ms on the proxy. Proxy generation runs at 6.5×, limited by decoding, so proxies are optional.
 - [x] Write up results ([phase0-results.md](phase0-results.md))
 
-## Phase 1: clips → templated short ← next
+## Phase 1: clips → templated short ✅ (built; real-use exit pending)
 
 Library and import, analyzers, compositor, four built-in templates, three caption styles. Also: pro timeline, inspector, music browser, export presets with SRT/VTT, settings, and the `clipper draft` CLI.
-**Exit:** 10 real shorts, each needing 5 or fewer manual tweaks. The CLI and the app produce identical Sequence JSON.
+**Exit:** 10 real shorts, each needing 5 or fewer manual tweaks. The CLI and the app produce identical Timeline JSON.
+- [x] Everything above is built. 144 tests pass. `scripts/e2e.sh` passes: pauses removed, −14.0 LUFS, SRT written, export at 209 fps.
+- [x] Drafts are deterministic, so the same inputs and seed give byte-identical JSON (tested). The CLI and the app share `DraftPipeline`.
+- [ ] Your 10 real shorts with 5 or fewer tweaks each (needs your footage and feedback).
 
-## Phase 2: VOD → many shorts
-Chunked transcription, signals (SoundAnalysis, loudness, scene cuts), MLX LLM highlight scoring, highlights browser, batch queue, saliency-based reframing, watch folders.
+## Phase 2: VOD → many shorts ← current
+Chunked transcription, signals (SoundAnalysis, loudness, scene cuts), highlight scoring (heuristic plus an optional local LLM, see ADR 0007), highlights browser, batch export, saliency-based reframing, watch folders.
 **Exit:** a 2-hour VOD yields 10 ranked candidates in under 15 minutes, and at least 5 of them are worth posting.
 
 ## Phase 3: authoring and generation

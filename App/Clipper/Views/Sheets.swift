@@ -196,6 +196,13 @@ struct SettingsView: View {
                 Toggle("Music by default", isOn: $model.settings.automation.music)
                 Toggle("Face tracking (reframing)", isOn: $model.settings.automation.faceTracking)
                 TextField("Speech language", text: $model.settings.automation.transcriptionLocale)
+                Section("Local LLM (optional, for ranking highlights)") {
+                    Toggle("Re-rank highlights with a local model", isOn: $model.settings.automation.useLLM)
+                    TextField("Server (OpenAI-compatible)", text: $model.settings.automation.llmBaseURL)
+                    TextField("Model", text: $model.settings.automation.llmModel)
+                    Text("Runs on this Mac via Ollama (http://localhost:11434/v1), LM Studio (:1234) or mlx_lm.server (:8080). Nothing is sent to the cloud.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
             }
             .tabItem { Label("Automation", systemImage: "wand.and.stars") }
             Form {
@@ -214,7 +221,7 @@ struct SettingsView: View {
             .tabItem { Label("Export", systemImage: "square.and.arrow.up") }
         }
         .formStyle(.grouped)
-        .frame(width: 520, height: 320)
+        .frame(width: 560, height: 440)
         .onChange(of: model.settings) { model.saveSettings() }
     }
 }
