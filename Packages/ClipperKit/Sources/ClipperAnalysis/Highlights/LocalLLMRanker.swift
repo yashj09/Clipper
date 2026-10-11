@@ -50,6 +50,8 @@ public enum LLMRankerError: Error, Sendable, Equatable, CustomStringConvertible 
     case badStatus(Int, body: String)
     /// The model's reply did not contain usable ranking JSON.
     case unparsable(String)
+    /// The endpoint or model would send transcripts off this Mac (non-loopback host, or a cloud-backed model).
+    case notLocal(String)
 
     public var description: String {
         switch self {
@@ -65,6 +67,8 @@ public enum LLMRankerError: Error, Sendable, Equatable, CustomStringConvertible 
                     + " and that the base URL ends in /v1."
             }
             return s
+        case let .notLocal(why):
+            return "Clipper only uses models running on this Mac: \(why). Pick a local model (e.g. `ollama pull qwen3:14b`)."
         case let .unparsable(raw):
             let excerpt = raw.trimmingCharacters(in: .whitespacesAndNewlines).prefix(300)
             return "The model's reply wasn't valid ranking JSON: \"\(excerpt)\". "
@@ -102,6 +106,7 @@ public struct LocalLLMRanker: Sendable {
 
     /// True if the server answers GET {base}/models (and lists the model, if it lists any). Fast (≤ 2 s timeout).
     public func isAvailable() async -> Bool {
+        guard endpoint.nonLocalReason == nil else { return false }
         guard let ids = try? await fetchModels(timeout: 2) else { return false }
         return ids.isEmpty || Self.contains(ids, model: endpoint.model)
     }
@@ -139,6 +144,7 @@ public struct LocalLLMRanker: Sendable {
     /// heuristic score. Sorted by score desc.
     public func rank(_ candidates: [Highlight], context: String? = nil,
                      progress: (@Sendable (Double) -> Void)? = nil) async throws -> [Highlight] {
+        if let why = endpoint.nonLocalReason { throw LLMRankerError.notLocal(why) }
         guard !candidates.isEmpty else { progress?(1); return [] }
         progress?(0)
         var result = candidates
@@ -353,5 +359,22 @@ public struct LocalLLMRanker: Sendable {
         let cut = t.prefix(maxExcerpt)
         let word = cut.lastIndex(of: " ").map { cut[..<$0] } ?? cut
         return String(word) + " …"
+    }
+}
+
+
+extension LLMEndpoint {
+    /// Ollama names cloud-backed models with a `cloud` tag (e.g. `glm-5:cloud`, `gpt-oss:120b-cloud`).
+    public static func isCloudModel(_ name: String) -> Bool {
+        let n = name.lowercased()
+        return n.hasSuffix(":cloud") || n.hasSuffix("-cloud") || n.contains(":cloud-")
+    }
+
+    /// Why this endpoint isn't local-only, or nil when it is (loopback host and not a cloud-backed model).
+    public var nonLocalReason: String? {
+        let host = (baseURL.host ?? "").lowercased()
+        if !["localhost", "127.0.0.1", "::1", "[::1]"].contains(host) { return "\(host.isEmpty ? baseURL.absoluteString : host) is not this Mac" }
+        if Self.isCloudModel(model) { return "“\(model)” is a cloud-backed model" }
+        return nil
     }
 }

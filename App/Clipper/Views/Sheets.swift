@@ -1,3 +1,4 @@
+import ClipperAnalysis
 import AppKit
 import ClipperAutomation
 import ClipperCore
@@ -176,6 +177,8 @@ struct ExportSheet: View {
 
 struct SettingsView: View {
     @Bindable var model: AppModel
+    @State private var localModels: [String] = []
+    @State private var modelStatus = ""
 
     var body: some View {
         TabView {
@@ -199,7 +202,25 @@ struct SettingsView: View {
                 Section("Local LLM (optional, for ranking highlights)") {
                     Toggle("Re-rank highlights with a local model", isOn: $model.settings.automation.useLLM)
                     TextField("Server (OpenAI-compatible)", text: $model.settings.automation.llmBaseURL)
-                    TextField("Model", text: $model.settings.automation.llmModel)
+                    HStack {
+                        TextField("Model", text: $model.settings.automation.llmModel)
+                        if !localModels.isEmpty {
+                            Picker("", selection: $model.settings.automation.llmModel) { ForEach(localModels, id: \.self) { Text($0).tag($0) } }
+                                .labelsHidden().frame(width: 160)
+                        }
+                        Button("Find local models") {
+                            Task {
+                                guard let url = URL(string: model.settings.automation.llmBaseURL) else { return }
+                                let ranker = LocalLLMRanker(endpoint: LLMEndpoint(baseURL: url, model: model.settings.automation.llmModel))
+                                do {
+                                    // Cloud-backed models would send transcripts off this Mac, so they're never offered.
+                                    localModels = try await ranker.models().filter { !LLMEndpoint.isCloudModel($0) }
+                                    modelStatus = localModels.isEmpty ? "Server reachable, but no local models installed." : "\(localModels.count) local models found."
+                                } catch { modelStatus = "\(error)" }
+                            }
+                        }
+                    }
+                    if !modelStatus.isEmpty { Text(modelStatus).font(.caption).foregroundStyle(.secondary) }
                     Text("Runs on this Mac via Ollama (http://localhost:11434/v1), LM Studio (:1234) or mlx_lm.server (:8080). Nothing is sent to the cloud.")
                         .font(.caption).foregroundStyle(.secondary)
                 }

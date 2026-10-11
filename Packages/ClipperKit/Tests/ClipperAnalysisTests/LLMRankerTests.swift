@@ -352,3 +352,18 @@ struct LLMRankerTests {
         #expect(out.contains { $0.signals["llm"] != nil })
     }
 }
+
+@Suite struct LLMLocalOnlyTests {
+    @Test func refusesNonLocalEndpointsAndCloudModels() async {
+        #expect(LLMEndpoint(baseURL: URL(string: "http://localhost:11434/v1")!, model: "qwen3:14b").nonLocalReason == nil)
+        #expect(LLMEndpoint(baseURL: URL(string: "http://127.0.0.1:1234/v1")!, model: "x").nonLocalReason == nil)
+        #expect(LLMEndpoint(baseURL: URL(string: "https://api.example.com/v1")!, model: "x").nonLocalReason != nil)
+        #expect(LLMEndpoint(baseURL: URL(string: "http://localhost:11434/v1")!, model: "glm-5:cloud").nonLocalReason != nil)
+        #expect(LLMEndpoint(baseURL: URL(string: "http://localhost:11434/v1")!, model: "gpt-oss:120b-cloud").nonLocalReason != nil)
+        let ranker = LocalLLMRanker(endpoint: LLMEndpoint(baseURL: URL(string: "http://localhost:11434/v1")!, model: "glm-5:cloud"))
+        #expect(await ranker.isAvailable() == false)
+        await #expect(throws: LLMRankerError.self) {
+            _ = try await ranker.rank([Highlight(start: 0, end: 30, score: 0.5, reason: "", text: "hi")])
+        }
+    }
+}

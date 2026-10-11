@@ -65,10 +65,13 @@ struct Highlights: AsyncParsableCommand {
         }
 
         Console.line(String(format: "Found %d highlights in %.0fs:", picks.count, (ContinuousClock.now - start).seconds))
-        Console.table([["#", "START", "LENGTH", "SCORE", "WHY", "OPENS WITH"]] + picks.enumerated().map { i, h in
-            [String(i + 1), HighlightFinder.clock(h.start), String(format: "%.0fs", h.duration), String(format: "%.2f", h.score),
-             (h.title.map { "“\($0)” — " } ?? "") + h.reason, String(h.text.prefix(48)) + (h.text.count > 48 ? "…" : "")]
-        })
+        var rows: [[String]] = [["#", "START", "LENGTH", "SCORE", "WHY", "OPENS WITH"]]
+        for (i, h) in picks.enumerated() {
+            let why: String = (h.title.map { "“\($0)” — " } ?? "") + h.reason
+            let opening: String = String(h.text.prefix(48)) + (h.text.count > 48 ? "…" : "")
+            rows.append([String(i + 1), HighlightFinder.clock(h.start), String(format: "%.0fs", h.duration), String(format: "%.2f", h.score), why, opening])
+        }
+        Console.table(rows)
         guard draft || export, !picks.isEmpty else { return }
 
         let pool = try s.musicPool()
