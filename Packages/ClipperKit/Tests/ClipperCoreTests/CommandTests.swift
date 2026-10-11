@@ -192,3 +192,14 @@ func ctx(_ asset: AssetID) -> EditContext { EditContext(assetDurations: [asset: 
         #expect(throws: ProjectError.self) { try ClipperJSON.decodeProject(json) }
     }
 }
+
+@Suite struct SettingsTests {
+    @Test func oldSettingsFilesKeepLoading() throws {
+        let old = Data(#"{"automation": {"defaultTemplate": "vlog", "captions": false}, "export": {"defaultPreset": "youtube-1080p"}}"#.utf8)
+        let s = try ClipperJSON.decode(ClipperSettings.self, from: old)
+        #expect(s.automation.defaultTemplate == "vlog" && !s.automation.captions)
+        #expect(s.automation.useLLM == false && s.automation.llmModel == "qwen3:14b")   // new keys default
+        #expect(s.export.defaultPreset == "youtube-1080p")
+        #expect(try ClipperJSON.decode(ClipperSettings.self, from: ClipperJSON.encode(s)) == s)
+    }
+}

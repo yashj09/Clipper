@@ -27,7 +27,26 @@ public struct ClipperSettings: Codable, Sendable, Equatable {
         /// "apple" (SpeechTranscriber) or "whisper" (whisper.cpp, if installed).
         public var transcriber = "apple"
         public var faceTracking = true
+        /// Optional local LLM (OpenAI-compatible server on this Mac) for re-ranking highlights. Off by default.
+        public var useLLM = false
+        public var llmBaseURL = "http://localhost:11434/v1"
+        public var llmModel = "qwen3:14b"
         public init() {}
+
+        // Tolerant decoding so settings files from older versions keep loading.
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            let d = Automation()
+            defaultTemplate = (try? c.decode(String.self, forKey: .defaultTemplate)) ?? d.defaultTemplate
+            captions = (try? c.decode(Bool.self, forKey: .captions)) ?? d.captions
+            music = (try? c.decode(Bool.self, forKey: .music)) ?? d.music
+            transcriptionLocale = (try? c.decode(String.self, forKey: .transcriptionLocale)) ?? d.transcriptionLocale
+            transcriber = (try? c.decode(String.self, forKey: .transcriber)) ?? d.transcriber
+            faceTracking = (try? c.decode(Bool.self, forKey: .faceTracking)) ?? d.faceTracking
+            useLLM = (try? c.decode(Bool.self, forKey: .useLLM)) ?? d.useLLM
+            llmBaseURL = (try? c.decode(String.self, forKey: .llmBaseURL)) ?? d.llmBaseURL
+            llmModel = (try? c.decode(String.self, forKey: .llmModel)) ?? d.llmModel
+        }
     }
 
     public struct Export: Codable, Sendable, Equatable {

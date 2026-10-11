@@ -52,7 +52,7 @@ public enum BuiltIns {
         slots: [
             Slot(id: "gameplay", name: "Gameplay", role: .primary,
                  transform: Transform(box: NormSize(1, 0.6), position: .constant(NormPoint(0.5, 0.7))),
-                 aloneTransform: .fullFrame),
+                 reframe: .saliency, aloneTransform: .fullFrame),
             Slot(id: "facecam", name: "Facecam", role: .secondary, fill: .linked,
                  transform: Transform(box: NormSize(1, 0.4), position: .constant(NormPoint(0.5, 0.2))),
                  reframe: .face, useAudio: false, optional: true),
@@ -70,7 +70,7 @@ public enum BuiltIns {
     public static let montage = Template(
         id: "montage", name: "Montage", summary: "Clips cut on the beat of the music, no voice. Great for highlights and travel reels.",
         contentType: .montage, canvas: Canvas(width: 1080, height: 1920, frameRate: .fps30),
-        slots: [Slot(id: "clips", name: "Clips", role: .primary, useAudio: false)],
+        slots: [Slot(id: "clips", name: "Clips", role: .primary, reframe: .saliency, useAudio: false)],
         elements: [title("title-bold", seconds: 2)],
         rules: Rules(maxDuration: 30, beatCut: BeatCutRule(everyBeats: 4, minClip: 0.8)),
         music: MusicPolicy(moods: ["upbeat", "energetic", "happy"], minBPM: 90, maxBPM: 140, gain: -4, fadeIn: 0, fadeOut: 1.5))

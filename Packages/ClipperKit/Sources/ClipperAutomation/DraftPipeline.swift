@@ -146,7 +146,7 @@ public enum DraftPipeline {
                     t += piece
                 }
             }
-            if slot.reframe == .face {
+            if slot.reframe != .none {
                 items = items.map { item in reframed(item, input: input, slot: slot, transform: transform, canvas: template.canvas) }
             }
             timeline.tracks.append(Track(id: ids.uuid(), kind: kind, name: slot.name, items: items))
@@ -155,7 +155,7 @@ public enum DraftPipeline {
         // 3. Primary-track visual passes.
         if let pti = primaryTrackIndex {
             var items = timeline.tracks[pti].items
-            if primary.reframe == .face {
+            if primary.reframe != .none {
                 items = items.map { reframed($0, input: input, slot: primary, transform: $0.transform, canvas: template.canvas) }
             }
             if let rule = rules.punchIn {
@@ -280,11 +280,20 @@ public enum DraftPipeline {
         return .media(ref)
     }
 
+    /// Reframes a cropped item to follow the speaker's face, or the visually salient region when there are no faces
+    /// (or the slot asks for saliency, e.g. gameplay and montage footage).
     static func reframed(_ item: Item, input: DraftInput, slot: Slot, transform: Transform, canvas: Canvas) -> Item {
-        guard case .media(let ref) = item.content, let clip = input.clips.first(where: { $0.asset.id == ref.asset }),
-              let faces = clip.analysis.faces else { return item }
+        guard slot.reframe != .none, case .media(let ref) = item.content,
+              let clip = input.clips.first(where: { $0.asset.id == ref.asset }) else { return item }
+        var track: FaceTrack?
+        if slot.reframe == .face, let faces = clip.analysis.faces, !faces.samples.isEmpty { track = faces }
+        if track == nil, let visual = clip.analysis.visual {
+            let samples = visual.samples.compactMap { s in s.salient.map { FaceSample(time: s.time, rect: $0, confidence: 1) } }
+            if !samples.isEmpty { track = FaceTrack(samples: samples) }
+        }
+        guard let track else { return item }
         let boxAspect = (transform.box.width * Double(canvas.width)) / (transform.box.height * Double(canvas.height))
-        return Visual.reframe(item, faces: faces, sourceAspect: clip.asset.info.displayAspect, boxAspect: boxAspect)
+        return Visual.reframe(item, faces: track, sourceAspect: clip.asset.info.displayAspect, boxAspect: boxAspect)
     }
 
     static func speechSpans(_ words: [TimedWord]) -> [(Double, Double)] {
