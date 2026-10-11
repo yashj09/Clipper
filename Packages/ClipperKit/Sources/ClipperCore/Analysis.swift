@@ -89,6 +89,39 @@ public struct FaceTrack: Codable, Sendable, Equatable {
     public init(samples: [FaceSample]) { self.samples = samples }
 }
 
+/// A detected sound event (Apple SoundAnalysis classifier), e.g. laughter, applause, cheering.
+public struct SoundEvent: Codable, Sendable, Equatable {
+    public var label: String
+    public var start: Double
+    public var end: Double
+    public var confidence: Double
+    public init(label: String, start: Double, end: Double, confidence: Double) {
+        self.label = label; self.start = start; self.end = end; self.confidence = confidence
+    }
+}
+
+public struct SoundEvents: Codable, Sendable, Equatable {
+    public var events: [SoundEvent]
+    public init(events: [SoundEvent]) { self.events = events }
+}
+
+/// Coarse visual activity, sampled about once per second from keyframes.
+public struct VisualSample: Codable, Sendable, Equatable {
+    public var time: Double
+    /// Difference to the previous sample, 0 (identical) … 1 (completely different).
+    public var change: Double
+    /// Most salient region (display-oriented, normalized, origin top-left), if any.
+    public var salient: NormRect?
+    public init(time: Double, change: Double, salient: NormRect?) { self.time = time; self.change = change; self.salient = salient }
+}
+
+public struct VisualActivity: Codable, Sendable, Equatable {
+    public var samples: [VisualSample]
+    /// Times of hard cuts / scene changes.
+    public var sceneCuts: [Double]
+    public init(samples: [VisualSample], sceneCuts: [Double]) { self.samples = samples; self.sceneCuts = sceneCuts }
+}
+
 /// Everything known about one asset. Fields are nil until that analyzer has run.
 public struct AssetAnalysis: Codable, Sendable, Equatable {
     public var transcript: Transcript?
@@ -96,8 +129,34 @@ public struct AssetAnalysis: Codable, Sendable, Equatable {
     public var loudness: LoudnessInfo?
     public var faces: FaceTrack?
     public var beats: BeatGrid?
+    public var events: SoundEvents?
+    public var visual: VisualActivity?
     public init(transcript: Transcript? = nil, speech: SpeechActivity? = nil, loudness: LoudnessInfo? = nil,
-                faces: FaceTrack? = nil, beats: BeatGrid? = nil) {
+                faces: FaceTrack? = nil, beats: BeatGrid? = nil, events: SoundEvents? = nil, visual: VisualActivity? = nil) {
         self.transcript = transcript; self.speech = speech; self.loudness = loudness; self.faces = faces; self.beats = beats
+        self.events = events; self.visual = visual
     }
+}
+
+/// A candidate short cut from a long recording.
+public struct Highlight: Codable, Sendable, Equatable, Identifiable {
+    public var id: String { "\(Int((start * 1000).rounded()))-\(Int((end * 1000).rounded()))" }
+    /// Source range in seconds.
+    public var start: Double
+    public var end: Double
+    /// 0…1, higher is better.
+    public var score: Double
+    /// Why it was picked (shown to the user).
+    public var reason: String
+    /// Suggested hook/title, if a ranker produced one.
+    public var title: String?
+    /// Transcript excerpt.
+    public var text: String
+    /// Named signal values that went into the score (for transparency and tuning).
+    public var signals: [String: Double]
+
+    public init(start: Double, end: Double, score: Double, reason: String, title: String? = nil, text: String, signals: [String: Double] = [:]) {
+        self.start = start; self.end = end; self.score = score; self.reason = reason; self.title = title; self.text = text; self.signals = signals
+    }
+    public var duration: Double { end - start }
 }
