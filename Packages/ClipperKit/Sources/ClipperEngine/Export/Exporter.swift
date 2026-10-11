@@ -172,6 +172,7 @@ public enum Exporter {
         if reader.status == .failed { writer.cancelWriting(); throw reader.error ?? CocoaError(.fileReadUnknown) }
         await writer.finishWriting()
         if writer.status != .completed { throw writer.error ?? CocoaError(.fileWriteUnknown) }
+        removeSafeSaveLeftovers(of: url)
 
         var sidecars: [URL] = []
         let base = url.deletingPathExtension()
@@ -182,6 +183,15 @@ public enum Exporter {
         }
         progress?(ExportProgress(fraction: 1, framesWritten: counter.value, framesPerSecond: Double(counter.value) / (ContinuousClock.now - start).seconds))
         return ExportResult(url: url, sidecars: sidecars, frames: counter.value, seconds: (ContinuousClock.now - start).seconds, appliedGain: appliedGain)
+    }
+
+    /// With `shouldOptimizeForNetworkUse` the writer saves via a temporary "<name>.sb-XXXX" sibling and may still be
+    /// cleaning it up when `finishWriting` returns; if the process exits right away (CLI) it is left behind.
+    static func removeSafeSaveLeftovers(of url: URL) {
+        let dir = url.deletingLastPathComponent(), prefix = url.lastPathComponent + ".sb-"
+        for name in (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? [] where name.hasPrefix(prefix) {
+            try? FileManager.default.removeItem(at: dir.appendingPathComponent(name))
+        }
     }
 
     nonisolated(unsafe) public static let pcmSettings: [String: Any] = [

@@ -1,3 +1,4 @@
+import Darwin
 import ClipperCore
 import Foundation
 import GRDB
@@ -115,21 +116,26 @@ extension Library {
     }
 
     /// Copies `source` into `Media/`, keeping its name and adding " 2", " 3"… if taken.
+    /// The copy goes to a unique temporary name first; the final name is claimed with an exclusive atomic rename,
+    /// so concurrent imports (even across processes) can never collide or half-overwrite each other.
     private func copyIntoMedia(_ source: URL) throws -> URL {
         let ext = source.pathExtension
         let base = source.deletingPathExtension().lastPathComponent
-        for n in 1... {
+        let tmp = mediaURL.appending(path: ".partial-\(UUID().uuidString)" + (ext.isEmpty ? "" : ".\(ext)"), directoryHint: .notDirectory)
+        try FileManager.default.copyItem(at: source, to: tmp)   // APFS clones the file
+        for n in 1...10_000 {
             let name = (n == 1 ? base : "\(base) \(n)") + (ext.isEmpty ? "" : ".\(ext)")
             let dest = mediaURL.appending(path: name, directoryHint: .notDirectory)
-            do {
-                // copyItem fails if `dest` exists, which makes the name reservation race-free. APFS clones the file.
-                try FileManager.default.copyItem(at: source, to: dest)
-                return dest
-            } catch CocoaError.fileWriteFileExists {
-                continue
+            if renamex_np(tmp.path, dest.path, UInt32(RENAME_EXCL)) == 0 { return dest }
+            if errno != EEXIST {
+                let code = errno
+                try? FileManager.default.removeItem(at: tmp)
+                throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: dest.path,
+                                                              NSUnderlyingErrorKey: POSIXError(POSIXErrorCode(rawValue: code) ?? .EIO)])
             }
         }
-        fatalError("unreachable")
+        try? FileManager.default.removeItem(at: tmp)
+        throw CocoaError(.fileWriteFileExists)
     }
 
     static func makeBookmark(for url: URL) -> Data? {

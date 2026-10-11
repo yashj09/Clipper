@@ -88,3 +88,27 @@ Ingest → probe → mezzanine/proxy → analysis jobs (transcript, speechActivi
 - Caches live in actors.
 - Metal objects sit in audited `@unchecked Sendable` wrappers.
 - The analysis scheduler is an actor with a concurrency limit per resource (ANE, GPU, CPU).
+
+## Long recordings → many shorts (Phase 2)
+1. **Analysis.** `AnalysisPipeline` runs these kinds:
+   - `speech` + `transcript`: streaming SpeechTranscriber. Word edges are snapped to voice activity.
+   - `events`: SoundAnalysis classifier v1. Laughter, applause, cheering, shouting, crowd, booing and gasp labels are merged into events.
+   - `visual`: about 1 sample per second from keyframe-near frames (AVAssetImageGenerator with tolerance, 256 px). Measures colour-histogram plus pixel change, adaptive scene cuts, and a Vision attention-saliency box.
+
+   Results are cached by content key, so re-running is instant.
+2. **Candidates** (`HighlightFinder`, pure):
+   - Windows start and end on sentence boundaries (20–60 s by default).
+   - Each window is scored on named signals: hook, completeness, pacing, energy/peaks, payoff (sound events weighted towards the end), visual action and length fit, minus fillers and dead air.
+   - Recordings without speech fall back to windows anchored on scene cuts.
+   - Greedy selection keeps the best non-overlapping windows.
+3. **Optional re-ranking** (`LocalLLMRanker`, ADR 0007):
+   - Uses an OpenAI-compatible server on localhost only. Cloud-tagged models and non-loopback hosts are refused.
+   - Final score = 0.6 × LLM score + 0.4 × heuristic score.
+   - Adds a hook title per candidate.
+4. **Drafting.** Each picked highlight becomes `ClipInput(inPoint:outPoint:)` → `DraftPipeline`, the same path as Phase 1. A project holds one timeline per short. Export runs as a batch.
+5. **Reframing.** Slots follow faces, or the salient region when there are no faces. Gameplay and montage reframe by saliency.
+6. **Automation hooks.**
+   - `clipper highlights`: list, `--draft`, `--export`.
+   - `clipper watch <folder>`: processes a file once its size is stable.
+
+**Audio decoding rule:** decode at the native sample rate and convert with `Resampler`. AVAssetReader's own resampling inserts clicks.

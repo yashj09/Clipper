@@ -20,9 +20,13 @@ Library and import, analyzers, compositor, four built-in templates, three captio
 - [x] Drafts are deterministic, so the same inputs and seed give byte-identical JSON (tested). The CLI and the app share `DraftPipeline`.
 - [ ] Your 10 real shorts with 5 or fewer tweaks each (needs your footage and feedback).
 
-## Phase 2: VOD → many shorts ← current
+## Phase 2: VOD → many shorts ✅ (built; real-use exit pending)
 Chunked transcription, signals (SoundAnalysis, loudness, scene cuts), highlight scoring (heuristic plus an optional local LLM, see ADR 0007), highlights browser, batch export, saliency-based reframing, watch folders.
 **Exit:** a 2-hour VOD yields 10 ranked candidates in under 15 minutes, and at least 5 of them are worth posting.
+- [x] Speed. 30-min 1080p60 VOD, cold: 104 s for transcript + sound events + visual activity + ranking, 224 MB RAM. Extrapolates to about 7 min for 2 h. Re-runs come from cache (0 s).
+- [x] Local LLM re-ranking: Ollama `qwen3.5:4b` ranked 15 candidates in 44 s, with hook titles and critiques. Cloud models are refused.
+- [x] Batch: 3 highlights drafted and exported in 12.5 s total (about 200 fps each, −14 LUFS, SRT).
+- [ ] At least 5 of 10 worth posting on a real VOD of yours (needs your recording and judgement).
 
 ## Phase 3: authoring and generation
 "Save as template", JSON template editor, Python worker with ACE-Step music generation, translated caption tracks, ASS export.

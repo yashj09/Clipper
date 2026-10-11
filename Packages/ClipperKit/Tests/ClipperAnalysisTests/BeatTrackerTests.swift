@@ -147,7 +147,8 @@ func meanSignedError(_ detected: [Double], _ truth: [Double]) -> Double {
         #expect(eq > 0 && eq < el)
     }
 
-    @Test func threeMinutesIsFast() {
+    /// Wall-clock benchmark: only meaningful on an idle machine, so opt-in (CLIPPER_PERF_TESTS=1).
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["CLIPPER_PERF_TESTS"] == "1")) func threeMinutesIsFast() {
         let track = ClickTrack(bpm: 124, seconds: 180, kick: true, ampJitter: 0.1, noiseDB: -40)
         let tracker = BeatTracker()
         let clock = ContinuousClock()

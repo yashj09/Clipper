@@ -109,3 +109,14 @@ func syntheticVOD() -> (AssetAnalysis, hook: ClosedRange<Double>, dull: ClosedRa
         #expect(item.transform.focus.value(at: item.range.duration).x > item.transform.focus.value(at: .zero).x)
     }
 }
+
+@Suite struct HighlightEnergyTests {
+    @Test func uniformLoudnessIsNotReportedAsLoudMoments() {
+        let (analysis, _, _) = syntheticVOD()
+        var flat = analysis
+        flat.speech?.rms = Envelope(hop: 0.01, values: Array(repeating: -20, count: 61_000))
+        let picks = HighlightFinder.find(flat, duration: 610, options: HighlightOptions(count: 5))
+        #expect(picks.allSatisfy { !$0.reason.contains("loud") })
+        #expect(picks.allSatisfy { ($0.signals["peaks"] ?? 0) == 0 })
+    }
+}

@@ -66,7 +66,8 @@ enum Signal {
         #expect(Envelope.rms(samples: [], sampleRate: 16_000).values.isEmpty)
     }
 
-    @Test func oneHourAt16kIsFast() {
+    /// Wall-clock benchmark: only meaningful on an idle machine, so opt-in (CLIPPER_PERF_TESTS=1).
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["CLIPPER_PERF_TESTS"] == "1")) func oneHourAt16kIsFast() {
         let sr = 16_000.0
         let x = Signal.noise(count: Int(3600 * sr), rmsDB: -30, seed: 7)
         let clock = ContinuousClock()

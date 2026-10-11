@@ -80,15 +80,29 @@ public enum HighlightFinder {
     struct Context {
         var analysis: AssetAnalysis
         var duration: Double
+        /// Loudness per second (dB of mean energy). 10 ms frames swing between syllables; seconds capture
+        /// "this part is louder" (shouting, excitement) rather than vowels.
+        var seconds: [Float]
         var medianRMS: Float
         var loudRMS: Float
 
         init(analysis: AssetAnalysis, duration: Double) {
             self.analysis = analysis
             self.duration = duration
-            let values = (analysis.speech?.rms.values ?? []).filter { $0 > -100 }.sorted()
-            medianRMS = values.isEmpty ? -40 : values[values.count / 2]
-            loudRMS = values.isEmpty ? -20 : values[min(values.count - 1, Int(Double(values.count) * 0.95))]
+            seconds = []
+            if let rms = analysis.speech?.rms, rms.hop > 0 {
+                let per = max(1, Int((1 / rms.hop).rounded()))
+                var i = 0
+                while i < rms.values.count {
+                    let chunk = rms.values[i..<min(i + per, rms.values.count)]
+                    let energy = chunk.reduce(Float(0)) { $0 + pow(10, $1 / 10) } / Float(chunk.count)
+                    seconds.append(10 * log10(max(energy, 1e-12)))
+                    i += per
+                }
+            }
+            let voiced = seconds.filter { $0 > -60 }.sorted()   // ignore silent seconds
+            medianRMS = voiced.isEmpty ? -40 : voiced[voiced.count / 2]
+            loudRMS = voiced.isEmpty ? -20 : voiced[min(voiced.count - 1, Int(Double(voiced.count) * 0.95))]
         }
     }
 
@@ -132,16 +146,18 @@ public enum HighlightFinder {
         }
 
         // Energy: loudness above the recording's median and loud peaks.
-        if let rms = context.analysis.speech?.rms, rms.hop > 0 {
-            let i0 = Int(a / rms.hop), i1 = min(rms.values.count, Int(b / rms.hop))
+        if !context.seconds.isEmpty {
+            let i0 = max(0, Int(a)), i1 = min(context.seconds.count, Int(b.rounded(.up)))
             if i1 > i0 {
-                let slice = rms.values[i0..<i1].filter { $0 > -100 }
+                let slice = context.seconds[i0..<i1].filter { $0 > -60 }
                 let mean = slice.isEmpty ? -60 : slice.reduce(0, +) / Float(slice.count)
                 let energy = Double(max(0, min(1, (mean - context.medianRMS + 6) / 12)))
-                let peaks = Double(slice.filter { $0 >= context.loudRMS }.count) * rms.hop
+                // Loud moments only count when they really stand out (≥ 6 dB over the typical second).
+                let threshold = max(context.loudRMS, context.medianRMS + 6)
+                let peaks = Double(slice.filter { $0 >= threshold }.count)
                 signals["energy"] = energy
                 signals["peaks"] = min(1, peaks / 3)
-                if peaks > 1.5 { reasons.append((0.3, "loud moments")) }
+                if peaks >= 2 { reasons.append((0.3, "loud moments")) }
             }
         }
 

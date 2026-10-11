@@ -251,7 +251,8 @@ struct LoudnessTests {
         #expect(LoudnessNormalizer.gain(measured: silent, target: -14, ceiling: -1, limiterAvailable: false) == 0)
     }
 
-    @Test func meterPerformanceTenMinutesStereo() {
+    /// Wall-clock benchmark: only meaningful on an idle machine, so opt-in (CLIPPER_PERF_TESTS=1).
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["CLIPPER_PERF_TESTS"] == "1")) func meterPerformanceTenMinutesStereo() {
         let sr = 48_000.0
         let chunk = sine(frequency: 997, amplitudeDB: -18, seconds: 1, sampleRate: sr)
         var meter = LoudnessMeter(sampleRate: sr, channels: 2)
