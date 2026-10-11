@@ -83,10 +83,12 @@ public struct WaveformPeaks: Sendable, Codable {
         let asset = AVURLAsset(url: url)
         let tracks = try await asset.loadTracks(withMediaType: .audio)
         guard !tracks.isEmpty else { return WaveformPeaks(sampleRate: 22_050, levels: []) }
+        // Decode at the native rate (AVAssetReader resampling inserts clicks, which would show as false peaks).
+        let rate = await Resampler.nativeSampleRate(of: tracks) ?? 48_000
         let reader = try AVAssetReader(asset: asset)
         let out = AVAssetReaderAudioMixOutput(audioTracks: tracks, audioSettings: [
             AVFormatIDKey: kAudioFormatLinearPCM, AVLinearPCMBitDepthKey: 32, AVLinearPCMIsFloatKey: true,
-            AVLinearPCMIsNonInterleaved: false, AVSampleRateKey: 22_050, AVNumberOfChannelsKey: 1])
+            AVLinearPCMIsNonInterleaved: false, AVSampleRateKey: rate, AVNumberOfChannelsKey: 1])
         reader.add(out)
         guard reader.startReading() else { throw reader.error ?? CocoaError(.fileReadUnknown) }
         var level0: [Float] = []
@@ -112,6 +114,6 @@ public struct WaveformPeaks: Sendable, Codable {
             }
             levels.append(next)
         }
-        return WaveformPeaks(sampleRate: 22_050, levels: levels)
+        return WaveformPeaks(sampleRate: rate, levels: levels)
     }
 }

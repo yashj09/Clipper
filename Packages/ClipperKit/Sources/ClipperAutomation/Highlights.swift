@@ -202,7 +202,7 @@ public enum HighlightFinder {
         return picked
     }
 
-    static func clock(_ s: Double) -> String {
+    public static func clock(_ s: Double) -> String {
         let t = Int(s)
         return t >= 3600 ? String(format: "%d:%02d:%02d", t / 3600, t / 60 % 60, t % 60) : String(format: "%d:%02d", t / 60, t % 60)
     }
