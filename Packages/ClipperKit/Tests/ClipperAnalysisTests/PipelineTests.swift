@@ -337,8 +337,8 @@ private final class CountingCache: AnalysisCache {
         let audio = MediaInfo(kind: .audio, duration: RationalTime(seconds: 1), audioChannels: 2, audioSampleRate: 48_000)
         let silentVideo = MediaInfo(kind: .video, duration: RationalTime(seconds: 1), naturalWidth: 10, naturalHeight: 10)
         let all = Set(AnalysisKind.allCases)
-        #expect(AnalysisPipeline.applicableKinds(all, for: audio) == [.speech, .transcript, .loudness, .beats])
-        #expect(AnalysisPipeline.applicableKinds(all, for: silentVideo) == [.faces])
+        #expect(AnalysisPipeline.applicableKinds(all, for: audio) == [.speech, .transcript, .loudness, .beats, .events])
+        #expect(AnalysisPipeline.applicableKinds(all, for: silentVideo) == [.faces, .visual])
     }
 
     @Test func noAudioAssetSkipsAudioKinds() async throws {
@@ -347,8 +347,9 @@ private final class CountingCache: AnalysisCache {
         let fake = FakeTranscriber()
         let a = try await AnalysisPipeline(cache: nil, options: AnalysisOptions(transcriber: fake))
             .analyze(asset, kinds: Set(AnalysisKind.allCases))
-        #expect(a.transcript == nil && a.speech == nil && a.loudness == nil && a.beats == nil)
+        #expect(a.transcript == nil && a.speech == nil && a.loudness == nil && a.beats == nil && a.events == nil)
         #expect(a.faces == FaceTrack(samples: []))
+        #expect(a.visual != nil)
         #expect(fake.calls.withLock { $0 } == 0)
     }
 

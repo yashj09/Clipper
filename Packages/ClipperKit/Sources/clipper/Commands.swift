@@ -102,7 +102,7 @@ struct Analyze: AsyncParsableCommand {
     static let configuration = CommandConfiguration(abstract: "Analyze library media (results are cached by content).")
     @OptionGroup var lib: LibraryOptions
     @Argument(help: "Asset names or id prefixes (default: all).") var assets: [String] = []
-    @Option(help: "Comma-separated: speech,transcript,loudness,faces,beats") var kinds = "speech,transcript,faces"
+    @Option(help: "Comma-separated: speech,transcript,loudness,faces,beats,events,visual") var kinds = "speech,transcript,faces"
     @Flag(help: "Print transcripts.") var transcript = false
 
     func run() async throws {

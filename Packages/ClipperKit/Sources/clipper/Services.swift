@@ -56,6 +56,8 @@ struct Services {
             if let t = a.transcript { parts.append("\(t.words.count) words") }
             if let s = a.speech { parts.append(String(format: "%.0fs speech", s.spans.reduce(0) { $0 + $1.duration })) }
             if let f = a.faces { parts.append("\(f.samples.count) face samples") }
+            if let e = a.events { parts.append("\(e.events.count) sound events") }
+            if let v = a.visual { parts.append("\(v.samples.count) visual samples, \(v.sceneCuts.count) cuts") }
             Console.line(String(format: "  ✓ %@ (%@) %.1fs", asset.name, parts.joined(separator: ", "), (ContinuousClock.now - start).seconds))
         }
         return result

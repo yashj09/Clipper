@@ -4,17 +4,21 @@ import CryptoKit
 import Foundation
 
 public enum AnalysisKind: String, Sendable, CaseIterable, Codable {
-    case speech, transcript, loudness, faces, beats
+    case speech, transcript, loudness, faces, beats, events, visual
 }
 
 public struct AnalysisOptions: Sendable {
     public var locale: Locale
     public var transcriber: any Transcriber
     public var faces: FaceAnalyzer
+    public var events: SoundEventAnalyzer
+    public var visual: VisualActivityAnalyzer
 
     public init(locale: Locale = Locale(identifier: "en-US"), transcriber: any Transcriber = AppleTranscriber(),
-                faces: FaceAnalyzer = FaceAnalyzer()) {
+                faces: FaceAnalyzer = FaceAnalyzer(), events: SoundEventAnalyzer = SoundEventAnalyzer(),
+                visual: VisualActivityAnalyzer = VisualActivityAnalyzer()) {
         self.locale = locale; self.transcriber = transcriber; self.faces = faces
+        self.events = events; self.visual = visual
     }
 }
 
@@ -38,8 +42,8 @@ public enum AnalysisPipelineError: Error, Sendable, CustomStringConvertible {
 ///   are cheap and re-applied on every call, so improving the snapper never needs a transcription re-run.
 ///   Analyzer IDs include whatever changes the output (transcriber engine + locale, face sampling rate).
 ///   Cache write failures are ignored (the result is still returned; it will simply be recomputed next time).
-/// - Applicability: kinds that don't apply are skipped, not errors. No audio track → no speech/transcript/loudness;
-///   `faces` needs a video or image; `beats` only runs for audio-only (music) assets.
+/// - Applicability: kinds that don't apply are skipped, not errors. No audio track → no speech/transcript/loudness/
+///   events; `faces` and `visual` need a video or image; `beats` only runs for audio-only (music) assets.
 ///   Requesting `transcript` also computes (and returns) `speech`, which the snapper needs.
 /// - Concurrency: up to `maxConcurrent` assets are analyzed at once (further calls wait for a slot, FIFO).
 ///   Within one asset the independent analyzers run in parallel (audio decode, ANE transcription, video decode).
@@ -69,6 +73,8 @@ public actor AnalysisPipeline {
         case .loudness: 1
         case .faces: 1
         case .beats: 1
+        case .events: 1
+        case .visual: 1
         }
     }
 
@@ -76,8 +82,8 @@ public actor AnalysisPipeline {
     public static func applicableKinds(_ kinds: Set<AnalysisKind>, for info: MediaInfo) -> Set<AnalysisKind> {
         kinds.filter { kind in
             switch kind {
-            case .speech, .transcript, .loudness: info.hasAudio
-            case .faces: info.hasVideo
+            case .speech, .transcript, .loudness, .events: info.hasAudio
+            case .faces, .visual: info.hasVideo
             case .beats: info.kind == .audio && info.hasAudio
             }
         }
@@ -91,7 +97,23 @@ public actor AnalysisPipeline {
         case .loudness: "loudness.r128"
         case .faces: "faces.vision.\(String(format: "%g", options.faces.samplesPerSecond))fps"
         case .beats: "beats"
+        case .events: "events.\(eventsSignature(options.events))"
+        case .visual: "visual.\(visualSignature(options.visual))"
         }
+    }
+
+    /// Everything that changes `SoundEventAnalyzer` output: window, overlap, threshold, merge gap and the label set
+    /// (hashed, since it can be long).
+    static func eventsSignature(_ e: SoundEventAnalyzer) -> String {
+        let labels = SHA256.hash(data: Data(e.labels.sorted().joined(separator: ",").utf8))
+            .prefix(4).map { String(format: "%02x", $0) }.joined()
+        return String(format: "sa1.w%g.o%g.c%g.g%g.", e.windowDuration, e.overlap, e.minConfidence, e.maxGap) + labels
+    }
+
+    /// Everything that changes `VisualActivityAnalyzer` output.
+    static func visualSignature(_ v: VisualActivityAnalyzer) -> String {
+        String(format: "%gs.t%g.px%g.cut%g-%g-%d", v.interval, v.tolerance, v.maximumSize, v.minCutChange, v.cutSigma,
+               v.cutWindow) + (v.saliency ? ".sal" : "")
     }
 
     /// Runs the requested analyzers for an asset, reusing cached results (keyed by asset.key + analyzer id + version),
@@ -124,6 +146,8 @@ public actor AnalysisPipeline {
         case loudness(LoudnessInfo)
         case faces(FaceTrack)
         case beats(BeatGrid)
+        case events(SoundEvents)
+        case visual(VisualActivity)
     }
 
     private static func run(_ asset: MediaAsset, kinds: Set<AnalysisKind>, cache: (any AnalysisCache)?,
@@ -159,6 +183,8 @@ public actor AnalysisPipeline {
             case .success(.loudness(let l)): analysis.loudness = l
             case .success(.faces(let f)): analysis.faces = f
             case .success(.beats(let b)): analysis.beats = b
+            case .success(.events(let e)): analysis.events = e
+            case .success(.visual(let v)): analysis.visual = v
             case .failure(let error):
                 if error is CancellationError { throw error }
                 failures[kind] = String(describing: error)
@@ -205,6 +231,18 @@ public actor AnalysisPipeline {
                     try await MusicAnalyzer.analyze(url: url).beats
                 }
                 return .success(.beats(b))
+            case .events:
+                let report: (@Sendable (Double) -> Void)? = progress.map { p in { @Sendable f in p(.events, f) } }
+                let e: SoundEvents = try await cached(kind, id, key, cache, progress) {
+                    try await options.events.analyze(url: url, range: nil, progress: report)
+                }
+                return .success(.events(e))
+            case .visual:
+                let report: (@Sendable (Double) -> Void)? = progress.map { p in { @Sendable f in p(.visual, f) } }
+                let v: VisualActivity = try await cached(kind, id, key, cache, progress) {
+                    try await options.visual.analyze(url: url, info: info, range: nil, progress: report)
+                }
+                return .success(.visual(v))
             }
         } catch {
             return .failure(error)
