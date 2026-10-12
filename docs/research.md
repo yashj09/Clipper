@@ -45,7 +45,7 @@ There is no healthy open-source equivalent of Shotstack's JSON video format. **W
 
 | Platform | Desktop OAuth | Restrictions until the app passes review | Server needed? |
 |---|---|---|---|
-| YouTube | Loopback redirect + PKCE (desktop client) | **Uploads are forced to private** until the compliance audit passes. Uploads have their own quota bucket (100 per day). | No |
+| YouTube | Loopback redirect + PKCE (desktop client) | **Corrected 2026-10-13:** Google's current `videos.insert` docs say unverified projects are no longer restricted to private. If uploads stay private, request the compliance audit. Uploads have their own quota bucket (100 per day). Testing-mode refresh tokens expire after 7 days. | No |
 | TikTok | Loopback + PKCE (hex SHA-256) | **Posts are forced to private (SELF_ONLY); at most 5 users per day.** Audit takes 2–6 weeks. Drafts/inbox upload also works. | No (the client secret is better kept behind a proxy) |
 | Instagram Reels | Instagram Login (no Facebook Page needed) | **Corrected 2026-10-13:** App Review and business verification are needed only for Advanced Access (other people's accounts). Standard Access covers accounts with a role on your app, so personal publishing needs no review. 100 posts per 24 h. Reels via the API: 3 s–15 min, at most 300 MB. | **Needs a public HTTPS `video_url`.** Clipper uploads to your R2/S3 bucket and passes a presigned URL, so no server is needed. |
 | Facebook Reels | Facebook Login | 30 per day per Page | No |

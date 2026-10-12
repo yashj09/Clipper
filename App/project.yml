@@ -15,7 +15,7 @@ targets:
     sources: [Clipper]
     dependencies:
       - package: ClipperKit
-        products: [ClipperCore, ClipperEngine, ClipperAnalysis, ClipperAutomation, ClipperLibrary]
+        products: [ClipperCore, ClipperEngine, ClipperAnalysis, ClipperAutomation, ClipperLibrary, ClipperPublish]
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.yashjain.Clipper

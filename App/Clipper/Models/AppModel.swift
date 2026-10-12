@@ -32,7 +32,7 @@ struct Activity: Equatable {
 /// App-wide state: the library and everything in it, plus the open editor.
 @MainActor @Observable
 final class AppModel {
-    enum Section: Hashable { case media, music, templates, project(UUID) }
+    enum Section: Hashable { case media, music, templates, publishing, project(UUID) }
 
     private(set) var library: Library?
     var libraryError: String?
@@ -49,6 +49,7 @@ final class AppModel {
     var exportSheet = false
     var highlightSession: HighlightSession?
     var saveTemplateSheet = false
+    var publishSheet = false
     var templateEdit: TemplateEditRequest?
 
     @ObservationIgnored private let watcher = FolderWatcher()

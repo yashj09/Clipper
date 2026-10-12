@@ -35,5 +35,17 @@ Chunked transcription, signals (SoundAnalysis, loudness, scene cuts), highlight 
 - [x] **Generated music** (ACE-Step 1.5, MIT, MLX on Apple Silicon) through the optional Python worker (`worker/`, uv, JSON-RPC over stdio). About 10–20 s per 30 s once loaded, 16 GB peak, 6.3 GB weights on first use. CLI `music generate`; app Music ▸ Generate.
 - [x] Fixed: SwiftPM recorded the deployment target as the binary's SDK, which hid installed translation languages from the CLI.
 
-## Phase 4: publishing and integrations
-YouTube (OAuth with PKCE), TikTok drafts, Instagram via a Cloudflare Worker and R2, calendar/Notion/Sheets, FCPXML/OTIO export.
+## Phase 4: publishing and integrations ✅ (built; live accounts pending your developer apps)
+- [x] **Bring-your-own-keys publishing** (Keychain, no server). Details in [publishing.md](publishing.md).
+  - YouTube: resumable upload plus captions.
+  - TikTok: inbox drafts, chunked upload.
+  - Instagram Reels: temporary R2/S3 object behind a SigV4 presigned URL, then the Graph API publishes it. No Cloudflare Worker needed.
+  - OAuth loopback with PKCE: RFC 7636 vector, plus TikTok's hex variant.
+  - All of this is tested against mock servers only.
+- [x] **Publishing queue**, `publish now|schedule|run-due`, an optional LaunchAgent, and an **.ics calendar feed** for Apple/Google Calendar and Notion subscriptions.
+- [x] **FCPXML 1.10/1.11** (validated against Apple's DTDs) and **OTIO** export. The OTIO file is read back by opentimelineio 0.18.1. `clipper interchange`; the app's Export ▸ "Open in another editor".
+- [x] App: Accounts settings, Publish sheet, Publishing sidebar, and watch folders with auto-draft.
+- [x] Fixed: an unanchored `models/` ignore rule had kept `App/Clipper/Models/` out of git. A fresh clone now builds.
+- [x] Facts corrected from official docs: YouTube no longer forces unverified projects to private; Instagram needs no App Review for your own account; Reels via the API are 3 s–15 min and at most 300 MB.
+- [ ] First real upload per platform, once you've created the developer apps (`clipper publish connect <platform> --help-setup`).
+- [ ] Notion/Sheets APIs: not built. The .ics feed covers calendar views without accounts.

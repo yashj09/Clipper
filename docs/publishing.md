@@ -1,7 +1,51 @@
-# Publishing
+# Publishing from Clipper
 
-Clipper publishes straight from your Mac with **your own** developer credentials ("bring your own keys"). There is
-no Clipper backend. Secrets live in the credential store (the macOS Keychain in the app/CLI) under namespaced keys.
+Clipper publishes with **your own developer apps** ("bring your own keys"). Client IDs, secrets, tokens and storage keys live in your Mac's **Keychain** (service `dev.yashjain.clipper.publish`). There's no Clipper server, and nothing is posted unless you run `clipper publish now|run-due` or press Publish in the app.
+
+| | YouTube | TikTok | Instagram |
+|---|---|---|---|
+| What you need | Google Cloud project + Desktop OAuth client | TikTok for Developers Desktop app | Meta app (Instagram Login) + Professional account + R2/S3 bucket |
+| Sign-in | Browser → loopback `127.0.0.1` callback (PKCE) | Browser → loopback callback (PKCE, hex S256) | Browser → paste the redirected https URL |
+| What happens | Resumable upload (+ SRT captions) | Draft in your TikTok inbox: finish it in the app | Reel published (public), temporary bucket file deleted |
+| Limits | 100 uploads/day | 5 pending drafts/24 h while unaudited | 100 posts/24 h; 3 s–15 min; ≤ 300 MB |
+
+```bash
+clipper publish connect youtube --help-setup   # how to create the app (same for tiktok, instagram)
+clipper publish connect youtube                # enter keys once, sign in in the browser
+clipper publish status
+clipper publish now "3 tips" --to youtube,tiktok --visibility unlisted
+clipper publish schedule "3 tips" --to youtube --at "2026-10-20 18:30"
+clipper publish run-due                        # or: clipper publish install-agent (every 15 min)
+clipper publish calendar                       # .ics feed for Calendar/Notion
+```
+
+In the app: **Settings ▸ Accounts** (keys, Connect, setup guides), **Publish…** in the editor, and **Publishing** in the sidebar.
+
+## YouTube
+
+1. Open https://console.cloud.google.com/ and create a project.
+2. Go to **APIs & Services → Library** and enable **YouTube Data API v3**.
+3. Set up the **OAuth consent screen**:
+   - user type **External**;
+   - add your Google account as a **test user**;
+   - add the scopes `https://www.googleapis.com/auth/youtube.upload` and `https://www.googleapis.com/auth/youtube.force-ssl` (the second is for captions).
+4. Go to **Clients → Create client** and choose **Desktop app**. You don't register a redirect URI: Clipper listens on `http://127.0.0.1:<random port>/callback`, which desktop clients allow.
+5. Run `clipper publish connect youtube` (or use the app's Accounts tab) and paste the Client ID and secret.
+
+Notes:
+- Google's current `videos.insert` docs say videos from unverified API projects are **no longer restricted to private**. If yours stay private, request the API compliance audit.
+- While the consent screen is in "Testing", refresh tokens expire after **7 days**, so reconnect weekly or publish the consent screen.
+- Captions are uploaded from the exported `.srt` files. The language comes from `<name>.<lang>.srt`.
+
+## TikTok
+
+1. Open https://developers.tiktok.com/ and go to **Manage apps → Connect an app**, platform **Desktop**.
+2. Add **Login Kit** and **Content Posting API**, with the scopes `user.info.basic` and `video.upload`.
+3. Under Login Kit, set the Desktop redirect URI to exactly `http://127.0.0.1:*/callback/`.
+4. Until the app is approved, use the **Sandbox** and add your account as a target user.
+5. Run `clipper publish connect tiktok` and paste the Client key and secret.
+
+Clipper uploads a **draft** to your inbox. You add the caption and sound and post it in the TikTok app; Clipper prints a suggested caption with the music credits.
 
 ## Instagram
 

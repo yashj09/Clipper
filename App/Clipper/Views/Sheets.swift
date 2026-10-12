@@ -151,6 +151,11 @@ struct ExportSheet: View {
                 Text(credits.joined(separator: "\n")).font(.caption).textSelection(.enabled)
             }
             HStack {
+                Menu("Open in another editor") {
+                    Button("Final Cut Pro / DaVinci Resolve (FCPXML)…") { dismiss(); model.exportInterchange(fcpxml: true) }
+                    Button("OpenTimelineIO (.otio)…") { dismiss(); model.exportInterchange(fcpxml: false) }
+                }
+                .fixedSize()
                 Spacer()
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
                 Button("Export…") {
@@ -265,9 +270,11 @@ struct SettingsView: View {
                 }
             }
             .tabItem { Label("Integrations", systemImage: "folder.badge.gearshape") }
+            AccountsSettings(model: model)
+                .tabItem { Label("Accounts", systemImage: "person.crop.circle.badge.checkmark") }
         }
         .formStyle(.grouped)
-        .frame(width: 560, height: 440)
+        .frame(width: 620, height: 560)
         .onChange(of: model.settings) { model.saveSettings() }
     }
 }

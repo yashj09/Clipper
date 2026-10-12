@@ -15,6 +15,7 @@ struct MainView: View {
                     Label("Media (\(model.assets.count))", systemImage: "film.stack").tag(AppModel.Section.media)
                     Label("Music (\(model.music.count))", systemImage: "music.note.list").tag(AppModel.Section.music)
                     Label("Templates", systemImage: "rectangle.3.group").tag(AppModel.Section.templates)
+                    Label("Publishing", systemImage: "paperplane").tag(AppModel.Section.publishing)
                 }
                 Section("Projects") {
                     ForEach(model.projects) { p in
@@ -33,6 +34,7 @@ struct MainView: View {
                 case .media: MediaGridView(model: model)
                 case .music: MusicListView(model: model)
                 case .templates: TemplatesView(model: model)
+                case .publishing: PublishingView(model: model)
                 case .project:
                     if let editor = model.editor { EditorView(model: model, editor: editor) } else { ProgressView() }
                 }
@@ -45,6 +47,7 @@ struct MainView: View {
         .sheet(isPresented: $model.exportSheet) { ExportSheet(model: model) }
         .sheet(item: $model.highlightSession) { session in HighlightsSheet(model: model, session: session) }
         .sheet(isPresented: $model.saveTemplateSheet) { SaveTemplateSheet(model: model) }
+        .sheet(isPresented: $model.publishSheet) { PublishSheet(model: model) }
         .sheet(item: $model.templateEdit) { req in TemplateEditorSheet(model: model, original: req.template, isNew: req.isNew) }
         .alert("Clipper", isPresented: Binding(get: { model.alert != nil }, set: { if !$0 { model.alert = nil } })) {
             Button("OK") { model.alert = nil }
@@ -304,6 +307,8 @@ struct EditorView: View {
                 Button { model.saveTemplateSheet = true } label: { Label("Save as Template", systemImage: "rectangle.stack.badge.plus") }
                     .help("Save this layout, titles, captions and music settings as a reusable template")
                 Button { model.exportSheet = true } label: { Label("Export", systemImage: "square.and.arrow.up") }
+                Button { model.publishSheet = true } label: { Label("Publish", systemImage: "paperplane") }
+                    .help("Publish or schedule to YouTube, TikTok or Instagram")
             }
         }
     }
