@@ -23,6 +23,7 @@ let package = Package(
         .library(name: "ClipperAnalysis", targets: ["ClipperAnalysis"]),
         .library(name: "ClipperAutomation", targets: ["ClipperAutomation"]),
         .library(name: "ClipperLibrary", targets: ["ClipperLibrary"]),
+        .library(name: "ClipperPublish", targets: ["ClipperPublish"]),
         .executable(name: "clipper", targets: ["clipper"]),
     ],
     dependencies: [
@@ -40,8 +41,10 @@ let package = Package(
         .target(name: "ClipperAnalysis", dependencies: ["ClipperCore", "ClipperEngine"]),
         // .clipperlib bundle: GRDB index, project/template documents, media, caches, settings.
         .target(name: "ClipperLibrary", dependencies: ["ClipperCore", .product(name: "GRDB", package: "GRDB.swift")]),
+        // Publishing: OAuth (loopback + PKCE), Keychain tokens, YouTube/TikTok/Instagram uploaders, interchange export.
+        .target(name: "ClipperPublish", dependencies: ["ClipperCore"]),
         .executableTarget(name: "clipper", dependencies: [
-            "ClipperCore", "ClipperEngine", "ClipperAnalysis", "ClipperAutomation", "ClipperLibrary",
+            "ClipperCore", "ClipperEngine", "ClipperAnalysis", "ClipperAutomation", "ClipperLibrary", "ClipperPublish",
             .product(name: "ArgumentParser", package: "swift-argument-parser"),
         ], exclude: ["Info.plist"],
         linkerSettings: [.unsafeFlags(["-Xlinker", "-sectcreate", "-Xlinker", "__TEXT", "-Xlinker", "__info_plist", "-Xlinker", cliInfoPlist]
@@ -52,5 +55,6 @@ let package = Package(
         .testTarget(name: "ClipperEngineTests", dependencies: ["ClipperEngine"]),
         .testTarget(name: "ClipperAnalysisTests", dependencies: ["ClipperAnalysis"]),
         .testTarget(name: "ClipperLibraryTests", dependencies: ["ClipperLibrary"]),
+        .testTarget(name: "ClipperPublishTests", dependencies: ["ClipperPublish"]),
     ]
 )
