@@ -53,7 +53,8 @@ import Testing
         #expect(ics.contains("DTSTART:20261003T"))
         #expect(ics.contains("\\, really\\; a very"))           // escaped
         for line in ics.components(separatedBy: "\r\n") { #expect(line.utf8.count <= 75) }
-        #expect(ics.contains("https://youtu.be/vid"))
+        #expect(ics.replacingOccurrences(of: "\r\n ", with: "").contains("https://youtu.be/vid"))
+        #expect(ics.replacingOccurrences(of: "\r\n ", with: "").contains("Platforms: YouTube\\, TikTok"))
     }
 
     @Test func foldingNeverSplitsCharacters() {

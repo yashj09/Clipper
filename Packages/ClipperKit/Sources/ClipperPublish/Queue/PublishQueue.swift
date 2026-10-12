@@ -97,8 +97,8 @@ public enum PublishCalendar {
                      "METHOD:PUBLISH", "X-WR-CALNAME:\(escape(calendarName))"]
         for p in posts where p.status != .cancelled {
             let platforms = p.platforms.map(\.displayName).joined(separator: ", ")
-            var description = "Status: \(p.status.rawValue)\\nPlatforms: \(platforms)\\nVisibility: \(p.visibility.rawValue)"
-            for r in p.results { description += "\\n\(r.platform.displayName): \(r.url?.absoluteString ?? r.remoteID) (\(escape(r.status)))" }
+            var description = "Status: \(p.status.rawValue)\\nPlatforms: \(escape(platforms))\\nVisibility: \(p.visibility.rawValue)"
+            for r in p.results { description += "\\n\(r.platform.displayName): \(escape(r.url?.absoluteString ?? r.remoteID)) (\(escape(r.status)))" }
             for (platform, error) in p.errors.sorted(by: { $0.key < $1.key }) { description += "\\n\(platform) error: \(escape(error))" }
             lines += ["BEGIN:VEVENT",
                       "UID:\(p.id.uuidString.lowercased())@clipper",
