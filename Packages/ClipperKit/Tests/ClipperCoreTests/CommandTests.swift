@@ -203,3 +203,21 @@ func ctx(_ asset: AssetID) -> EditContext { EditContext(assetDurations: [asset: 
         #expect(try ClipperJSON.decode(ClipperSettings.self, from: ClipperJSON.encode(s)) == s)
     }
 }
+
+@Suite struct BeatOctaveTests {
+    @Test func halvesADoubleTempoGrid() {
+        let beats = stride(from: 0.1, to: 20, by: 60.0 / 192).map { $0 }
+        let g = BeatGrid(bpm: 192, beats: beats, downbeats: stride(from: 0, to: beats.count, by: 4).map { beats[$0] })
+        let fixed = g.resolvingOctave(toward: 96)
+        #expect(fixed.bpm == 96)
+        #expect(abs((fixed.beats[1] - fixed.beats[0]) - 0.625) < 1e-9)
+        #expect(fixed.beats.first == g.downbeats.first)
+        #expect(g.resolvingOctave(toward: 190) == g)   // no octave error → unchanged
+    }
+
+    @Test func doublesAHalfTempoGrid() {
+        let beats = stride(from: 0, to: 10, by: 1.0).map { $0 }
+        let fixed = BeatGrid(bpm: 60, beats: beats).resolvingOctave(toward: 120)
+        #expect(fixed.bpm == 120 && fixed.beats.count == beats.count * 2 - 1)
+    }
+}

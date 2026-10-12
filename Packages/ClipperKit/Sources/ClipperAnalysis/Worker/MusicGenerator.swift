@@ -50,7 +50,9 @@ public struct MusicGenerator: Sendable {
         let model = result["model"]?.stringValue ?? "ACE-Step 1.5"
 
         let url = URL(fileURLWithPath: path)
-        let analysis = try await MusicAnalyzer.analyze(url: url)
+        var analysis = try await MusicAnalyzer.analyze(url: url)
+        // Hi-hat-heavy genres often read as double tempo; we know what tempo was asked for.
+        if let bpm { analysis.beats = analysis.beats.resolvingOctave(toward: bpm) }
         let measuredBPM = analysis.beats.bpm > 0 ? analysis.beats.bpm : bpm
         return MusicTrack(
             id: id, title: Self.title(for: prompt), artist: model, url: url, duration: analysis.duration,

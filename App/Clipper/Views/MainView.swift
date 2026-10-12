@@ -158,6 +158,7 @@ struct MediaCard: View {
 
 struct MusicListView: View {
     @Bindable var model: AppModel
+    @State private var generateSheet = false
     var body: some View {
         Table(model.music) {
             TableColumn("Title", value: \.title)
@@ -181,6 +182,49 @@ struct MusicListView: View {
             }
         }
         .navigationTitle("Music")
+        .toolbar {
+            ToolbarItem { Button { generateSheet = true } label: { Label("Generate", systemImage: "waveform.badge.plus") }
+                .help("Generate royalty-free music on this Mac (ACE-Step)") }
+            ToolbarItem { Button { Task { await model.addStarterPack() } } label: { Label("Starter Pack", systemImage: "arrow.down.circle") } }
+        }
+        .sheet(isPresented: $generateSheet) { GenerateMusicSheet(model: model) }
+    }
+}
+
+struct GenerateMusicSheet: View {
+    @Bindable var model: AppModel
+    @Environment(\.dismiss) private var dismiss
+    @State private var prompt = "upbeat lo-fi hip hop, warm keys, soft drums"
+    @State private var duration = 60.0
+    @State private var useBPM = false
+    @State private var bpm = 100.0
+    @State private var variations = 2
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Generate music").font(.title2.bold())
+            Text("Runs ACE-Step 1.5 (MIT) on this Mac — no attribution needed. The first run downloads about 6.3 GB; generating uses ~11–16 GB of memory while it runs.")
+                .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            TextField("Describe the music", text: $prompt, axis: .vertical).lineLimit(2...4).textFieldStyle(.roundedBorder)
+            LabeledContent("Length") { HStack { Slider(value: $duration, in: 15...180, step: 15); Text("\(Int(duration)) s").frame(width: 50) } }
+            HStack {
+                Toggle("Tempo", isOn: $useBPM)
+                Slider(value: $bpm, in: 60...180, step: 1).disabled(!useBPM)
+                Text("\(Int(bpm)) BPM").frame(width: 70).foregroundStyle(useBPM ? .primary : .secondary)
+            }
+            Stepper("Takes: \(variations)", value: $variations, in: 1...4)
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("Generate") {
+                    let (p, d, b, v) = (prompt, duration, useBPM ? bpm : nil, variations)
+                    dismiss()
+                    Task { await model.generateMusic(prompt: p, duration: d, bpm: b, variations: v) }
+                }
+                .keyboardShortcut(.defaultAction).disabled(prompt.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        }
+        .padding(20).frame(width: 520)
     }
 }
 

@@ -59,6 +59,28 @@ public struct BeatGrid: Codable, Sendable, Equatable {
     public var downbeats: [Double]
     public init(bpm: Double, beats: [Double], downbeats: [Double] = []) { self.bpm = bpm; self.beats = beats; self.downbeats = downbeats }
 
+    /// Fixes a double/half-tempo detection when the intended tempo is known (e.g. the BPM asked of a music generator):
+    /// at ~2× the hint keeps every other beat (the phase containing the first downbeat); at ~½× inserts midpoints.
+    /// Downbeats are re-derived every 4 beats. Returns self when no octave error is apparent.
+    public func resolvingOctave(toward hint: Double) -> BeatGrid {
+        guard hint > 0, bpm > 0, beats.count >= 4 else { return self }
+        let ratio = bpm / hint
+        var newBeats: [Double]
+        if abs(ratio - 2) < 0.15 {
+            let firstDown = downbeats.first ?? beats[0]
+            let phase = (beats.firstIndex { abs($0 - firstDown) < 1e-6 } ?? 0) % 2
+            newBeats = stride(from: phase, to: beats.count, by: 2).map { beats[$0] }
+        } else if abs(ratio - 0.5) < 0.08 {
+            newBeats = []
+            for (a, b) in zip(beats, beats.dropFirst()) { newBeats += [a, (a + b) / 2] }
+            newBeats.append(beats.last!)
+        } else {
+            return self
+        }
+        let downs = stride(from: 0, to: newBeats.count, by: 4).map { newBeats[$0] }
+        return BeatGrid(bpm: bpm / (ratio > 1 ? 2 : 0.5), beats: newBeats, downbeats: downs)
+    }
+
     public func nearestBeat(to t: Double) -> Double? {
         guard !beats.isEmpty else { return nil }
         var lo = 0, hi = beats.count - 1

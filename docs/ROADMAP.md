@@ -28,8 +28,12 @@ Chunked transcription, signals (SoundAnalysis, loudness, scene cuts), highlight 
 - [x] Batch: 3 highlights drafted and exported in 12.5 s total (about 200 fps each, −14 LUFS, SRT).
 - [ ] At least 5 of 10 worth posting on a real VOD of yours (needs your recording and judgement).
 
-## Phase 3: authoring and generation
-"Save as template", JSON template editor, Python worker with ACE-Step music generation, translated caption tracks, ASS export.
+## Phase 3: authoring and generation ✅
+- [x] **Save as template** (`TemplateBuilder`): infers slots (role, fill including linked facecams, placement), elements (whole/opening/closing, `{title}`), styles, caption/duck/punch-in rules and music level. Round-trip tested. CLI `templates save|validate|export`; app sheet plus a JSON editor with live validation.
+- [x] **Translated caption tracks** (Apple Translation, on-device). Whole sentences are translated, then spread over pages by word share. Hidden by default; the app's Captions menu chooses the burned-in language. Sidecars `<name>.<lang>.srt|vtt|ass`. Right-to-left and CJK layout.
+- [x] **ASS export** with styles and karaoke `\k` timing (master presets).
+- [x] **Generated music** (ACE-Step 1.5, MIT, MLX on Apple Silicon) through the optional Python worker (`worker/`, uv, JSON-RPC over stdio). About 10–20 s per 30 s once loaded, 16 GB peak, 6.3 GB weights on first use. CLI `music generate`; app Music ▸ Generate.
+- [x] Fixed: SwiftPM recorded the deployment target as the binary's SDK, which hid installed translation languages from the CLI.
 
 ## Phase 4: publishing and integrations
 YouTube (OAuth with PKCE), TikTok drafts, Instagram via a Cloudflare Worker and R2, calendar/Notion/Sheets, FCPXML/OTIO export.

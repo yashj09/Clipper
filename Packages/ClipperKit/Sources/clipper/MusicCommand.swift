@@ -8,7 +8,7 @@ import Foundation
 
 struct MusicCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(commandName: "music", abstract: "Manage the music library.",
-                                                    subcommands: [List.self, Add.self, StarterPack.self])
+                                                    subcommands: [List.self, Add.self, StarterPack.self, Generate.self])
 
     struct List: AsyncParsableCommand {
         static let configuration = CommandConfiguration(abstract: "List music with tempo, moods and licence.")
@@ -92,6 +92,48 @@ struct MusicCommand: AsyncParsableCommand {
             }
             try s.library.upsertMusic(tracks)
             Console.line("Added \(tracks.count) tracks to \(dir.path)")
+        }
+    }
+
+    struct Generate: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            abstract: "Generate royalty-free instrumental music on this Mac (ACE-Step 1.5, MIT) and add it to the library.",
+            discussion: """
+            Needs the optional Python worker (uv + `worker/`); the first run downloads ~6.3 GB of model weights.
+            Example: clipper music generate "upbeat lo-fi hip hop, warm keys" --duration 60 --bpm 90 --variations 2
+            """)
+        @OptionGroup var lib: LibraryOptions
+        @Argument(help: "Describe the music (genre, mood, instruments).") var prompt: String
+        @Option(help: "Length in seconds.") var duration: Double = 60
+        @Option(help: "Tempo hint.") var bpm: Double?
+        @Option(help: "How many different takes.") var variations = 1
+        @Option(help: "First seed.") var seed = 0
+        @Option(help: "Comma-separated moods (default: inferred from the prompt).") var moods: String?
+
+        func run() async throws {
+            let s = try Services(lib)
+            guard let generator = MusicGenerator.makeDefault() else {
+                throw ValidationErrorText("Music generation needs uv (brew install uv) and the worker project (set CLIPPER_WORKER_DIR to the repo's worker/ folder).")
+            }
+            defer { Task { await generator.worker.shutdown() } }
+            let out = s.library.url.appendingPathComponent("Music/Generated", isDirectory: true)
+            let moodList = moods.map { $0.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces).lowercased() } }
+            var tracks: [MusicTrack] = []
+            for v in 0..<max(1, variations) {
+                let start = ContinuousClock.now
+                let track = try await generator.generate(prompt: prompt, duration: duration, bpm: bpm, seed: seed + v,
+                                                         outputDirectory: out, moods: moodList) { p in
+                    Console.progress(p.fraction, "take \(v + 1)/\(variations) " + (p.message ?? ""))
+                }
+                Console.clearStatus()
+                Console.line(String(format: "  ✓ %@ — %.0fs, %@ BPM, moods %@ (%.0fs)", track.title, track.duration,
+                                    track.bpm.map { String(format: "%.0f", $0) } ?? "?", track.moods.joined(separator: ","),
+                                    (ContinuousClock.now - start).seconds))
+                tracks.append(track)
+            }
+            try s.library.upsertMusic(tracks)
+            await generator.worker.shutdown()
+            Console.line("Added \(tracks.count) generated track(s) to the music library (licence: generated, no attribution needed).")
         }
     }
 }

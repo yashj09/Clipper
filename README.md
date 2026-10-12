@@ -10,7 +10,7 @@ A local-first, automatic video editor for macOS. Built for short-form content, w
 
 ## Status
 
-**Phase 1 in progress: clips → templated short.** See [`docs/ROADMAP.md`](docs/ROADMAP.md).
+**Phases 0–3 built** (spikes, clips → short, long recording → many shorts, templates/translation/generated music). See [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 ## Build
 
@@ -34,7 +34,13 @@ clipper draft -t gameplay match.mov --slot facecam=cam.mov --export
 clipper draft -t montage trip/*.mov --title "Lisbon" --export --preset shorts-1080x1920
 clipper projects                                  # list drafts
 clipper export "3 tips" --preset youtube-1080p     # re-export with another preset
-clipper templates --export-to ~/ClipperTemplates   # editable JSON copies of the templates
+clipper templates export ~/ClipperTemplates        # editable JSON copies of the templates
+clipper templates save "3 tips" --name "My style"  # turn an edited project into a reusable template
+clipper highlights stream.mov --top 10 --draft --export        # long recording → ranked shorts
+clipper highlights stream.mov --llm ollama --model qwen3.5:4b  # optional local-LLM re-ranking
+clipper captions translate "3 tips" --to es,fr     # on-device translated caption tracks + subtitle files
+clipper music generate "upbeat lo-fi, warm keys" --duration 60  # local AI music (optional worker, ACE-Step)
+clipper watch ~/Movies/OBS --template gameplay --export         # auto-draft new recordings
 ```
 
 Built-in templates:

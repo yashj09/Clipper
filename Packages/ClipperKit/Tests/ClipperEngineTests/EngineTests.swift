@@ -106,8 +106,9 @@ enum Pixels {
             while ContinuousClock.now < end {
                 if output.hasNewPixelBuffer(forItemTime: t) {
                     var shown = CMTime.invalid
-                    if let px = output.copyPixelBuffer(forItemTime: t, itemTimeForDisplay: &shown) {
-                        if shown != t { print("preview: asked \(t.seconds) got \(shown.seconds)") }
+                    // Only accept the frame actually displayed for `t`: right after loading, the player may still
+                    // vend the frame it decoded at 0 for the first seek.
+                    if let px = output.copyPixelBuffer(forItemTime: t, itemTimeForDisplay: &shown), shown == t {
                         result[t] = px; break
                     }
                 }
