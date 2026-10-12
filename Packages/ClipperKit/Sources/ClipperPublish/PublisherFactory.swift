@@ -23,7 +23,9 @@ public struct PlatformCredentials: Sendable {
             [CredentialField(key: "tiktok.client_key", label: "Client key", isSecret: false),
              CredentialField(key: "tiktok.client_secret", label: "Client secret", isSecret: true)]
         case .instagram:
-            []
+            [CredentialField(key: InstagramCredentialKeys.appID, label: "Instagram app ID", isSecret: false),
+             CredentialField(key: InstagramCredentialKeys.appSecret, label: "Instagram app secret", isSecret: true),
+             CredentialField(key: InstagramCredentialKeys.redirectURI, label: "Redirect URI (https, as registered)", isSecret: false)]
         }
     }
 
@@ -105,11 +107,13 @@ public enum PublisherFactory {
     /// is connected.
     public static func publisher(for platform: Platform, store: any CredentialStore,
                                  endpoints: PublishEndpoints = .production, session: URLSession? = nil) throws -> any Publisher {
+        // Instagram has its own long-lived token flow and needs a bucket for the public video URL.
+        if platform == .instagram { return InstagramPublisher(credentials: store) }
         let tokens = try tokenManager(for: platform, store: store, endpoints: endpoints, session: session)
         switch platform {
         case .youtube: return YouTubePublisher(tokens: tokens, uploadBaseURL: endpoints.youtubeUploadBase, session: session)
         case .tiktok: return TikTokPublisher(tokens: tokens, apiBaseURL: endpoints.tiktokAPIBase, session: session)
-        case .instagram: throw PublishError.unsupportedPlatform(.instagram)
+        case .instagram: return InstagramPublisher(credentials: store)
         }
     }
 
@@ -178,8 +182,16 @@ public enum PublisherFactory {
             """
         case .instagram:
             """
-            Instagram publishing isn't supported yet: the Graph API needs the video at a public HTTPS URL, which needs a \
-            server or bucket Clipper doesn't have.
+            Instagram (Reels) uses your own Meta app plus a storage bucket ("bring your own keys"; full guide: docs/publishing.md#instagram):
+            1. Switch your Instagram account to Professional (Business or Creator).
+            2. https://developers.facebook.com/ → create an app → add the Instagram product → "API setup with Instagram login".
+            3. Register an https redirect URI (e.g. https://localhost:8443/) and copy the Instagram app ID and secret.
+            4. Add your account as an Instagram tester/role on the app (no App Review needed to post to your own account).
+            5. Create a Cloudflare R2 bucket (free tier) and an API token with Object Read & Write for it. Instagram fetches
+               the video from a short-lived presigned URL; Clipper deletes the temporary file afterwards.
+            6. In Clipper, enter the app ID/secret/redirect URI and storage keys, sign in in the browser, then paste the URL
+               you were redirected to (the page may show an error — the address bar contains the code).
+            Notes: Reels must be public, 3 s–15 min, ≤ 300 MB; 100 API posts per 24 h; tokens last 60 days and refresh automatically.
             """
         }
     }
