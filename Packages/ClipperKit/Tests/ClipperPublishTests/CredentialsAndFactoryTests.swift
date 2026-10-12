@@ -39,7 +39,7 @@ import Testing
         let credentials = PlatformCredentials(store: store)
         #expect(try credentials.missingKeys(for: .youtube).map(\.key) == ["youtube.client_id", "youtube.client_secret"])
         #expect(try credentials.missingKeys(for: .tiktok).map(\.key) == ["tiktok.client_key", "tiktok.client_secret"])
-        #expect(try credentials.missingKeys(for: .instagram).isEmpty)
+        #expect(try credentials.missingKeys(for: .instagram).map(\.key) == ["instagram.app_id", "instagram.app_secret", "instagram.redirect_uri"])
 
         try credentials.setValue("  id-123  ", for: PlatformCredentials.fields(for: .youtube)[0])
         try store.setString("   ", for: "youtube.client_secret")                // blank counts as missing
@@ -48,9 +48,8 @@ import Testing
         #expect(throws: PublishError.missingCredentials(.youtube, ["youtube.client_secret"])) {
             _ = try PublisherFactory.publisher(for: .youtube, store: store)
         }
-        #expect(throws: PublishError.unsupportedPlatform(.instagram)) {
-            _ = try PublisherFactory.publisher(for: .instagram, store: store)
-        }
+        // Instagram has its own token flow: a publisher exists without credentials but isn't connected.
+        #expect(try PublisherFactory.publisher(for: .instagram, store: store).platform == .instagram)
     }
 
     @Test func oauthConfigsMatchProviderDocs() throws {
@@ -122,6 +121,7 @@ import Testing
         let tiktok = PublisherFactory.setupInstructions(for: .tiktok)
         #expect(tiktok.contains("http://127.0.0.1:*/callback/"))
         #expect(tiktok.contains("video.upload"))
-        #expect(PublisherFactory.setupInstructions(for: .instagram).contains("isn't supported"))
+        let instagram = PublisherFactory.setupInstructions(for: .instagram)
+        #expect(instagram.contains("https") && instagram.contains("R2") && instagram.contains("public"))
     }
 }
