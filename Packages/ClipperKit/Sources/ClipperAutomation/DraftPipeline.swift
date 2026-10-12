@@ -183,7 +183,11 @@ public enum DraftPipeline {
             if let style = styles[rule.style] {
                 let caps = Captions.items(words: spoken, styleName: rule.style, style: style, rate: rate, ids: &ids)
                 if !caps.isEmpty {
-                    timeline.tracks.append(Track(id: ids.uuid(), kind: .caption, name: "Captions", items: caps))
+                    // Tag the captions with the transcript's language so they export as `<name>.<lang>.srt` too
+                    // and translations know their source language.
+                    let language = primaryClips.lazy.compactMap(\.analysis.transcript?.locale).first { !$0.isEmpty }
+                        .map { Locale.Language(identifier: $0).minimalIdentifier }
+                    timeline.tracks.append(Track(id: ids.uuid(), kind: .caption, name: "Captions", items: caps, language: language))
                     report.notes.append("Captioned \(spoken.filter { !$0.isFiller }.count) words in \(caps.count) pages (\(rule.style))")
                 } else if !primaryClips.isEmpty {
                     report.warnings.append("No transcript available: captions skipped")

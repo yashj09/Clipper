@@ -211,11 +211,15 @@ public struct Track: Codable, Sendable, Equatable, Identifiable {
     public var locked: Bool
     /// Track gain in dB.
     public var gain: Double
+    /// BCP-47 language of a caption track's text (e.g. "en", "es", "zh-Hant"); nil = unknown / not applicable.
+    /// Language-tagged caption tracks also export as `<name>.<language>.srt|vtt|ass` sidecars, even when hidden.
+    /// Optional, so documents written before it existed decode unchanged (missing key → nil, nil is never encoded).
+    public var language: String?
 
     public init(id: TrackID = UUID(), kind: TrackKind, name: String? = nil, items: [Item] = [],
-                muted: Bool = false, hidden: Bool = false, locked: Bool = false, gain: Double = 0) {
+                muted: Bool = false, hidden: Bool = false, locked: Bool = false, gain: Double = 0, language: String? = nil) {
         self.id = id; self.kind = kind; self.name = name ?? kind.rawValue.capitalized; self.items = items
-        self.muted = muted; self.hidden = hidden; self.locked = locked; self.gain = gain
+        self.muted = muted; self.hidden = hidden; self.locked = locked; self.gain = gain; self.language = language
     }
 
     public var end: RationalTime { items.map(\.end).max() ?? .zero }

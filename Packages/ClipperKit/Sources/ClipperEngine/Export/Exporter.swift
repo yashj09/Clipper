@@ -1,6 +1,7 @@
 import AVFoundation
 import Accelerate
 import ClipperCore
+import CoreText
 import VideoToolbox
 
 public struct ExportProgress: Sendable {
@@ -174,15 +175,26 @@ public enum Exporter {
         if writer.status != .completed { throw writer.error ?? CocoaError(.fileWriteUnknown) }
         removeSafeSaveLeftovers(of: url)
 
-        var sidecars: [URL] = []
-        let base = url.deletingPathExtension()
-        for format in preset.sidecars where !Subtitles.cues(timeline).isEmpty {
-            let file = base.appendingPathExtension(format.rawValue)
-            try (format == .srt ? Subtitles.srt(timeline) : Subtitles.vtt(timeline)).write(to: file, atomically: true, encoding: .utf8)
-            sidecars.append(file)
-        }
+        let sidecars = try writeSidecars(timeline, formats: preset.sidecars, besides: url)
         progress?(ExportProgress(fraction: 1, framesWritten: counter.value, framesPerSecond: Double(counter.value) / (ContinuousClock.now - start).seconds))
         return ExportResult(url: url, sidecars: sidecars, frames: counter.value, seconds: (ContinuousClock.now - start).seconds, appliedGain: appliedGain)
+    }
+
+    /// Writes subtitle sidecars next to `url`: `<name>.<ext>` for the visible caption tracks and
+    /// `<name>.<language>.<ext>` for every language-tagged caption track (hidden ones included).
+    @discardableResult
+    public static func writeSidecars(_ timeline: Timeline, formats: [SidecarFormat], besides url: URL) throws -> [URL] {
+        let dir = url.deletingLastPathComponent(), name = url.deletingPathExtension().lastPathComponent
+        return try Subtitles.sidecars(timeline, formats: formats, fontName: fontFullName).map { sidecar in
+            let file = dir.appendingPathComponent("\(name).\(sidecar.suffix)")
+            try sidecar.contents.write(to: file, atomically: true, encoding: .utf8)
+            return file
+        }
+    }
+
+    /// The full name Core Text resolves a PostScript name to (the font the renderer actually draws with), for ASS styles.
+    static func fontFullName(_ postScript: String) -> String {
+        CTFontCopyFullName(CTFontCreateWithName(postScript as CFString, 12, nil)) as String
     }
 
     /// With `shouldOptimizeForNetworkUse` the writer saves via a temporary "<name>.sb-XXXX" sibling and may still be

@@ -98,6 +98,7 @@ func talkingInput(seed: UInt64 = 7, title: String? = "Local editing in 60s") -> 
 
         let captions = tl.tracks.first { $0.kind == .caption }!
         #expect(!captions.items.isEmpty)
+        #expect(captions.language == "en")                              // from the transcript's "en-US"
         for c in captions.items { if case .caption(let cap) = c.content { #expect(cap.words.count <= 3) } }
         #expect(!captions.items.contains { if case .caption(let c) = $0.content { c.words.contains { $0.text.uppercased() == "UM" } } else { false } })
 

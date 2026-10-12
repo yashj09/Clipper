@@ -11,7 +11,11 @@ public enum ContainerFormat: String, Codable, Sendable { case mp4, mov
     public var fileExtension: String { rawValue }
 }
 
-public enum SidecarFormat: String, Codable, Sendable, CaseIterable { case srt, vtt }
+/// Subtitle files written next to an export. `ass` keeps the caption styling (font, colours, outline, position)
+/// and karaoke word timing; `srt`/`vtt` are plain text.
+public enum SidecarFormat: String, Codable, Sendable, CaseIterable { case srt, vtt, ass
+    public var fileExtension: String { rawValue }
+}
 
 /// How to render a timeline to a file. Platform presets bake in each platform's sweet spot.
 public struct ExportPreset: Codable, Sendable, Equatable, Identifiable {
@@ -51,9 +55,9 @@ public struct ExportPreset: Codable, Sendable, Equatable, Identifiable {
         ExportPreset(id: "portrait-4x5", name: "Feed 4:5 (1080×1350, H.264)", width: 1080, height: 1350,
                      codec: .h264, container: .mp4, videoBitrate: 12),
         ExportPreset(id: "master-hevc", name: "Master HEVC (timeline size)", codec: .hevc, container: .mov, videoBitrate: 60,
-                     loudness: nil, sidecars: [.srt, .vtt]),
+                     loudness: nil, sidecars: [.srt, .vtt, .ass]),
         ExportPreset(id: "master-prores422hq", name: "Master ProRes 422 HQ", codec: .prores422HQ, container: .mov,
-                     loudness: nil, sidecars: [.srt, .vtt]),
+                     loudness: nil, sidecars: [.srt, .vtt, .ass]),
         ExportPreset(id: "overlay-prores4444", name: "Transparent overlay (ProRes 4444)", codec: .prores4444, container: .mov,
                      loudness: nil, transparentBackground: true, sidecars: []),
         ExportPreset(id: "overlay-hevc-alpha", name: "Transparent overlay (HEVC + alpha)", codec: .hevcAlpha, container: .mov,

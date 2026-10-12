@@ -37,6 +37,8 @@ public enum TextRenderer {
     }
 
     /// Greedy word wrap within `style.maxWidth` of the canvas, capped at `style.maxLines` lines for captions.
+    /// Right-to-left text (Hebrew, Arabic…) keeps its logical word order but places words right to left on each line;
+    /// each word's own glyphs are shaped by Core Text.
     public static func layout(words input: [String], style: TextStyle, canvasWidth: Int, canvasHeight: Int) -> TextLayout {
         let font = font(style, canvasHeight: canvasHeight)
         let fontSize = CTFontGetSize(font)
@@ -64,6 +66,7 @@ public enum TextRenderer {
         let blockW = (lineW.max() ?? 0)
         let size = CGSize(width: ceil(blockW + pad * 2), height: ceil(Double(lines.count) * lineHeight + pad * 2 - (lineHeight - ascent - descent)))
 
+        let rightToLeft = CaptionLanguage.startsRightToLeft(words.joined(separator: " "))
         var outWords: [TextLayout.Word] = Array(repeating: .init(text: "", rect: .zero, line: 0), count: words.count)
         var lineRects: [CGRect] = []
         for (li, idx) in lines.enumerated() {
@@ -76,8 +79,10 @@ public enum TextRenderer {
             }
             let top = pad + Double(li) * lineHeight
             lineRects.append(CGRect(x: x, y: top, width: lw, height: ascent + descent))
+            let lineStart = x
             for i in idx {
-                outWords[i] = .init(text: words[i], rect: CGRect(x: x, y: top, width: wordW[i], height: ascent + descent), line: li)
+                let wx = rightToLeft ? lineStart + lw - (x - lineStart) - wordW[i] : x
+                outWords[i] = .init(text: words[i], rect: CGRect(x: wx, y: top, width: wordW[i], height: ascent + descent), line: li)
                 x += wordW[i] + space
             }
         }

@@ -112,3 +112,17 @@ Ingest → probe → mezzanine/proxy → analysis jobs (transcript, speechActivi
    - `clipper watch <folder>`: processes a file once its size is stable.
 
 **Audio decoding rule:** decode at the native sample rate and convert with `Resampler`. AVAssetReader's own resampling inserts clicks.
+
+## Caption sidecars and translation
+- **Sidecars** (`Subtitles.sidecars`, written by the Exporter for the preset's `sidecars`):
+  - `<name>.srt|vtt|ass` holds the **visible** caption tracks, i.e. what is burned in.
+  - `<name>.<language>.srt|vtt|ass` is written for every caption track with a `Track.language`, **including hidden ones**.
+  - Drafts tag their caption track with the transcript's language.
+- **ASS** keeps the styling: font (Core Text full name), size × canvas height, colours as `&HAABBGGRR` (alpha inverted), outline/box/shadow, alignment and margins from `position`/`maxWidth`.
+  - The active-word highlight becomes `\k` karaoke. Because `\k` keeps a word in `PrimaryColour` once it is reached, karaoke styles put the highlight colour in `PrimaryColour` and the text colour in `SecondaryColour`.
+  - Each word also carries a `\t` that turns it back to its own colour when the next word starts, so only the spoken word is highlighted, as in the renderer.
+- **Translation** (`CaptionTranslator`, Apple Translation, on-device, installed pairs only):
+  - Each page is translated whole. Words are spread over the source words' time span in proportion to their length, and page timing is kept.
+  - The result is a hidden `Captions (<lang>)` track placed after the source. IDs are derived from the source ID and the language, so re-running replaces the track.
+  - Chinese, Japanese and Thai are cut into short phrases at punctuation and `NLTokenizer` word boundaries, and sidecars join them without spaces.
+  - Right-to-left pages are laid out right to left by `TextRenderer`.
