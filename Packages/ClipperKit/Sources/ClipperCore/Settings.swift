@@ -85,10 +85,13 @@ public struct ClipperSettings: Codable, Sendable, Equatable {
 
     public struct Integrations: Codable, Sendable, Equatable {
         public var watchFolders: [URL] = []
+        /// Template used to auto-draft new recordings found in watch folders; nil = import only.
+        public var watchTemplate: String? = nil
         public init() {}
         public init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
             watchFolders = c.value(.watchFolders, [])
+            watchTemplate = (try? c.decodeIfPresent(String.self, forKey: .watchTemplate)) ?? nil
         }
     }
 

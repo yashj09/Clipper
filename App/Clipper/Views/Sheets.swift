@@ -240,6 +240,31 @@ struct SettingsView: View {
                 Toggle("Write SRT/VTT caption files", isOn: $model.settings.export.writeSidecars)
             }
             .tabItem { Label("Export", systemImage: "square.and.arrow.up") }
+            Form {
+                Section("Watch folders") {
+                    ForEach(model.settings.integrations.watchFolders, id: \.self) { url in
+                        HStack {
+                            Text(url.path).lineLimit(1).truncationMode(.middle)
+                            Spacer()
+                            Button(role: .destructive) { model.settings.integrations.watchFolders.removeAll { $0 == url } } label: { Image(systemName: "minus.circle") }
+                                .buttonStyle(.borderless)
+                        }
+                    }
+                    Button("Add Folder…") {
+                        let p = NSOpenPanel(); p.canChooseDirectories = true; p.canChooseFiles = false
+                        if p.runModal() == .OK, let u = p.url, !model.settings.integrations.watchFolders.contains(u) {
+                            model.settings.integrations.watchFolders.append(u)
+                        }
+                    }
+                    Picker("New recordings", selection: $model.settings.integrations.watchTemplate) {
+                        Text("Import only").tag(String?.none)
+                        ForEach(model.templates) { Text("Import + draft with \($0.name)").tag(Optional($0.id)) }
+                    }
+                    Text("Files already in the folder are ignored; new ones are picked up once they stop growing (OBS, AirDrop, phone transfers).")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            .tabItem { Label("Integrations", systemImage: "folder.badge.gearshape") }
         }
         .formStyle(.grouped)
         .frame(width: 560, height: 440)
