@@ -294,3 +294,22 @@ func karaokeTotal(_ text: Substring) -> Int {
         #expect(!CaptionLanguage.startsRightToLeft("hello שלום") && !CaptionLanguage.startsRightToLeft("123"))
     }
 }
+
+@Suite struct SidecarDedupTests {
+    func captionTrack(_ lang: String, hidden: Bool, text: String) -> Track {
+        Track(kind: .caption, items: [Item(range: TimeRange(seconds: 0, 1),
+              content: .caption(CaptionContent(words: [.init(text: text, start: .zero, end: RationalTime(seconds: 1))], style: "s")))],
+              hidden: hidden, language: lang)
+    }
+
+    @Test func singleLanguageWritesOnePlainFile() {
+        let tl = Timeline(name: "t", canvas: .vertical1080, tracks: [captionTrack("en", hidden: false, text: "hi")])
+        #expect(Subtitles.sidecars(tl, formats: [.srt]).map(\.suffix) == ["srt"])
+    }
+
+    @Test func translationsGetTheirOwnFiles() {
+        let tl = Timeline(name: "t", canvas: .vertical1080, tracks: [captionTrack("en", hidden: false, text: "hi"),
+                                                                      captionTrack("es", hidden: true, text: "hola")])
+        #expect(Subtitles.sidecars(tl, formats: [.srt]).map(\.suffix) == ["srt", "en.srt", "es.srt"])
+    }
+}

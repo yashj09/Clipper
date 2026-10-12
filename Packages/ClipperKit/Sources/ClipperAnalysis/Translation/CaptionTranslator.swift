@@ -81,11 +81,18 @@ public struct CaptionTranslator: Sendable {
         @unknown default: throw CaptionTranslationError.unsupportedPair(source: fromTag, target: toTag)
         }
 
+        // Translate whole sentences (pages are only 2–7 words; translated alone they lose context), then spread each
+        // sentence's translation back over its pages in proportion to their source word counts.
         let pages = Self.pages(of: track, language: fromTag)
+        let groups = Self.sentenceGroups(track)
         var translations: [ItemID: String] = [:]
-        if !pages.isEmpty {
+        if !groups.isEmpty {
+            let pageText = Dictionary(uniqueKeysWithValues: pages.map { ($0.id, $0.text) })
             let session = TranslationSession(installedSource: from, target: target)
-            let requests = pages.enumerated().map { i, page in TranslationSession.Request(sourceText: page.text, clientIdentifier: String(i)) }
+            let requests = groups.enumerated().map { i, group in
+                TranslationSession.Request(sourceText: CaptionLanguage.join(group.compactMap { pageText[$0.id] }, language: fromTag),
+                                           clientIdentifier: String(i))
+            }
             let responses: [TranslationSession.Response]
             do {
                 responses = try await session.translations(from: requests)
@@ -94,7 +101,12 @@ public struct CaptionTranslator: Sendable {
             }
             for (n, response) in responses.enumerated() {
                 let i = response.clientIdentifier.flatMap(Int.init) ?? n
-                if pages.indices.contains(i) { translations[pages[i].id] = response.targetText }
+                guard groups.indices.contains(i) else { continue }
+                let group = groups[i]
+                let words = Self.split(response.targetText, language: toTag, uppercase: false)
+                for (page, share) in zip(group, Self.distribute(words, over: group.map(\.words))) where !share.isEmpty {
+                    translations[page.id] = CaptionLanguage.join(share, language: toTag)
+                }
             }
         }
         return try Self.applying(translations, to: timeline, sourceTrack: track.id, language: toTag)
@@ -114,6 +126,45 @@ public struct CaptionTranslator: Sendable {
         // Translations are inserted after their source, so the first caption track is the original.
         guard let track = timeline.tracks.first(where: { $0.kind == .caption }) else { throw CaptionTranslationError.noCaptionTrack }
         return track
+    }
+
+    /// Consecutive caption pages forming a sentence: a group ends after sentence punctuation, before a pause of more
+    /// than 0.8 s, or at about 25 source words.
+    static func sentenceGroups(_ track: Track) -> [[(id: ItemID, words: Int)]] {
+        var groups: [[(id: ItemID, words: Int)]] = []
+        var current: [(id: ItemID, words: Int)] = []
+        var lastEnd: RationalTime?
+        for item in track.items {
+            guard case .caption(let c) = item.content, !c.words.isEmpty else { continue }
+            if let lastEnd, (item.start - lastEnd).seconds > 0.8, !current.isEmpty { groups.append(current); current = [] }
+            current.append((item.id, c.words.count))
+            lastEnd = item.end
+            let ends = c.words.last?.text.last.map { ".?!。？！".contains($0) } ?? false
+            if ends || current.reduce(0, { $0 + $1.words }) >= 25 { groups.append(current); current = [] }
+        }
+        if !current.isEmpty { groups.append(current) }
+        return groups
+    }
+
+    /// Splits `words` into consecutive runs sized in proportion to `weights` (largest remainder), giving every run at
+    /// least one word when there are enough words. Order is preserved; all words are used.
+    static func distribute(_ words: [String], over weights: [Int]) -> [[String]] {
+        guard !weights.isEmpty else { return [] }
+        guard !words.isEmpty else { return weights.map { _ in [] } }
+        let n = words.count, total = max(1, weights.reduce(0) { $0 + max($1, 1) })
+        let exact = weights.map { Double(max($0, 1)) * Double(n) / Double(total) }
+        var counts = exact.map { Int($0.rounded(.down)) }
+        let order = exact.indices.sorted { (exact[$0] - Double(counts[$0])) > (exact[$1] - Double(counts[$1])) }
+        for i in order.prefix(n - counts.reduce(0, +)) { counts[i] += 1 }
+        if n >= weights.count {
+            // Make sure no page ends up empty: borrow from the largest run.
+            for i in counts.indices where counts[i] == 0 {
+                if let j = counts.indices.max(by: { counts[$0] < counts[$1] }), counts[j] > 1 { counts[j] -= 1; counts[i] = 1 }
+            }
+        }
+        var out: [[String]] = [], k = 0
+        for c in counts { out.append(Array(words[k..<min(n, k + c)])); k += c }
+        return out
     }
 
     /// The text of each non-empty caption page, in order.

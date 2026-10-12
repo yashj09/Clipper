@@ -8,7 +8,7 @@ struct Clipper: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "clipper",
         abstract: "Local automatic video editor: import clips, draft a video from a template, export.",
-        subcommands: [Draft.self, Highlights.self, Watch.self, Import.self, Analyze.self, Export.self, Projects.self, Templates.self, MusicCommand.self,
+        subcommands: [Draft.self, Highlights.self, Watch.self, Captions.self, Import.self, Analyze.self, Export.self, Projects.self, Templates.self, MusicCommand.self,
                       Presets.self, Info.self])
 }
 

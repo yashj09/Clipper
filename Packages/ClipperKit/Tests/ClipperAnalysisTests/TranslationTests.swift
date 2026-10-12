@@ -222,3 +222,14 @@ private func installedTarget() async -> Locale.Language? {
         }
     }
 }
+
+@Suite struct SentenceTranslationTests {
+    @Test func distributeIsProportionalOrderedAndComplete() {
+        let words = "uno dos tres cuatro cinco seis siete".split(separator: " ").map(String.init)
+        let runs = CaptionTranslator.distribute(words, over: [3, 3, 1])
+        #expect(runs.flatMap { $0 } == words)
+        #expect(runs.map(\.count) == [3, 3, 1])
+        #expect(CaptionTranslator.distribute(["a", "b"], over: [5, 1, 1]).flatMap { $0 } == ["a", "b"])
+        #expect(CaptionTranslator.distribute(["a", "b", "c"], over: [10, 1, 1]).allSatisfy { !$0.isEmpty })
+    }
+}

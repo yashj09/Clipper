@@ -44,12 +44,16 @@ public enum Subtitles {
     /// Core Text; the default derives a full name from the PostScript name).
     public static func sidecars(_ timeline: Timeline, formats: [SidecarFormat],
                                 fontName: (String) -> String = ASS.fullName(postScript:)) -> [Sidecar] {
-        var groups: [(prefix: String, tracks: [Track])] = [("", visibleTracks(timeline))]
+        let visible = visibleTracks(timeline)
+        var groups: [(prefix: String, tracks: [Track])] = [("", visible)]
         var used = Set<String>()
         for language in languages(timeline) {
             let tag = fileTag(language)
             guard used.insert(tag.lowercased()).inserted else { continue }
-            groups.append(("\(tag).", tracks(timeline, language: language)))
+            let tagged = tracks(timeline, language: language)
+            // Same tracks as the plain sidecar (e.g. English-only captions): don't write a duplicate file.
+            if Set(tagged.map(\.id)) == Set(visible.map(\.id)) && languages(timeline).count == 1 { continue }
+            groups.append(("\(tag).", tagged))
         }
         var out: [Sidecar] = []
         for format in formats {

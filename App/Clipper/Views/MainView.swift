@@ -1,3 +1,4 @@
+import ClipperAnalysis
 import ClipperAutomation
 import ClipperCore
 import ClipperEngine
@@ -255,10 +256,47 @@ struct EditorView: View {
                 Button { zoom = .zoomOut(UUID()) } label: { Label("Zoom Out", systemImage: "minus.magnifyingglass") }
                 Button { zoom = .fit(UUID()) } label: { Label("Fit", systemImage: "arrow.left.and.right") }
                 Button { zoom = .zoomIn(UUID()) } label: { Label("Zoom In", systemImage: "plus.magnifyingglass") }
+                CaptionsMenu(editor: editor)
                 Button { model.saveTemplateSheet = true } label: { Label("Save as Template", systemImage: "rectangle.stack.badge.plus") }
                     .help("Save this layout, titles, captions and music settings as a reusable template")
                 Button { model.exportSheet = true } label: { Label("Export", systemImage: "square.and.arrow.up") }
             }
+        }
+    }
+}
+
+
+/// Translate captions on-device and pick which language is burned in.
+struct CaptionsMenu: View {
+    @Bindable var editor: EditorModel
+    @State private var installed: Set<String> = []
+    static let languages: [(String, String)] = [("es", "Spanish"), ("fr", "French"), ("de", "German"), ("it", "Italian"),
+        ("pt-BR", "Portuguese (Brazil)"), ("hi", "Hindi"), ("ja", "Japanese"), ("ko", "Korean"), ("zh-Hans", "Chinese (Simplified)"),
+        ("ar", "Arabic"), ("ru", "Russian"), ("tr", "Turkish"), ("id", "Indonesian"), ("nl", "Dutch")]
+
+    var body: some View {
+        let languages = editor.timeline.tracks.filter { $0.kind == .caption }.compactMap(\.language)
+        Menu {
+            Section("Translate on this Mac") {
+                ForEach(Self.languages, id: \.0) { code, name in
+                    Button(installed.contains(code) ? name : "\(name) (download in System Settings)") {
+                        Task { await editor.translateCaptions(to: code) }
+                    }
+                    .disabled(!installed.contains(code))
+                }
+            }
+            if languages.count > 1 {
+                Section("Burn in") {
+                    ForEach(languages, id: \.self) { code in Button(code) { editor.showCaptions(language: code) } }
+                }
+            }
+        } label: { Label("Captions", systemImage: "captions.bubble") }
+        .help("Translate captions (exported as extra subtitle files) and choose the language shown on the video")
+        .task {
+            let source = editor.timeline.tracks.first { $0.kind == .caption }?.language ?? "en"
+            let status = await CaptionTranslator.availability(from: Locale.Language(identifier: source),
+                                                              to: Self.languages.map { Locale.Language(identifier: $0.0) })
+            installed = Set(Self.languages.map(\.0).filter { status[Locale.Language(identifier: $0)] == .installed })
         }
     }
 }
