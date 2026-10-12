@@ -439,7 +439,9 @@ struct InstagramTests {
     @Test func pastedRedirectParsing() throws {
         #expect(try InstagramAuth.authorizationCode(fromPasted: " https://localhost:8443/?code=AQBx-yz_9#_ \n", expectedState: nil) == "AQBx-yz_9")
         #expect(try InstagramAuth.authorizationCode(fromPasted: "https://localhost:8443/?code=abc&state=s1#_", expectedState: "s1") == "abc")
-        #expect(try InstagramAuth.authorizationCode(fromPasted: "AQBcode#_", expectedState: "s1") == "AQBcode")
+        // A bare code is only accepted when no state was issued (it can't be checked against CSRF).
+        #expect(try InstagramAuth.authorizationCode(fromPasted: "AQBcode#_", expectedState: nil) == "AQBcode")
+        #expect(throws: InstagramError.self) { try InstagramAuth.authorizationCode(fromPasted: "AQBcode#_", expectedState: "s1") }
         #expect(throws: InstagramError.authorization("state mismatch — start the login again")) {
             try InstagramAuth.authorizationCode(fromPasted: "https://localhost:8443/?code=abc&state=evil", expectedState: "s1")
         }

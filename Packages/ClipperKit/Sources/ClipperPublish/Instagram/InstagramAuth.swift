@@ -78,7 +78,11 @@ public struct InstagramAuth: Sendable {
         let text = pasted.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { throw InstagramError.authorization("nothing was pasted") }
         guard text.contains("?") || text.contains("://") else {
-            // A bare code.
+            // A bare code can't be checked against `state` (OAuth CSRF protection: someone could get you to paste a
+            // code for *their* account). Only accept it when no state was issued.
+            if expectedState != nil {
+                throw InstagramError.authorization("paste the full redirected URL (it contains ?code=…&state=…), not just the code")
+            }
             return text.hasSuffix("#_") ? String(text.dropLast(2)) : text
         }
         guard let components = URLComponents(string: text) else {
