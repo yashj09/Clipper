@@ -146,23 +146,79 @@ struct Projects: AsyncParsableCommand {
 }
 
 struct Templates: AsyncParsableCommand {
-    static let configuration = CommandConfiguration(abstract: "List templates or export them as editable JSON.")
-    @OptionGroup var lib: LibraryOptions
-    @Option(help: "Write every template as JSON into this folder.") var exportTo: String?
+    static let configuration = CommandConfiguration(abstract: "List, export, save and validate templates.",
+                                                    subcommands: [List.self, ExportJSON.self, Save.self, Validate.self],
+                                                    defaultSubcommand: List.self)
 
-    func run() async throws {
-        let s = try Services(lib)
-        let all = try s.templates()
-        if let dir = exportTo {
-            let url = URL(fileURLWithPath: (dir as NSString).expandingTildeInPath)
-            try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-            for t in all { try ClipperJSON.encode(t).write(to: url.appendingPathComponent("\(t.id).json")) }
-            Console.line("Wrote \(all.count) templates to \(url.path). Edit and pass with --template file.json, or save into the library's Templates/ folder.")
-            return
+    struct List: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(abstract: "List built-in and your templates.")
+        @OptionGroup var lib: LibraryOptions
+        func run() async throws {
+            let s = try Services(lib)
+            let user = Set(try s.library.userTemplates().map(\.id))
+            Console.table([["ID", "NAME", "CANVAS", "SLOTS", "SUMMARY"]] + (try s.templates()).map {
+                [$0.id + (user.contains($0.id) ? " *" : ""), $0.name, "\($0.canvas.width)×\($0.canvas.height)@\($0.canvas.frameRate)",
+                 $0.slots.map(\.id).joined(separator: ","), $0.summary]
+            })
+            if !user.isEmpty { Console.line("* your templates (stored in the library)") }
         }
-        Console.table([["ID", "NAME", "CANVAS", "SLOTS", "SUMMARY"]] + all.map {
-            [$0.id, $0.name, "\($0.canvas.width)×\($0.canvas.height)@\($0.canvas.frameRate)", $0.slots.map(\.id).joined(separator: ","), $0.summary]
-        })
+    }
+
+    struct ExportJSON: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(commandName: "export", abstract: "Write templates as editable JSON files.")
+        @OptionGroup var lib: LibraryOptions
+        @Argument(help: "Destination folder.") var folder: String
+        func run() async throws {
+            let s = try Services(lib)
+            let url = URL(fileURLWithPath: (folder as NSString).expandingTildeInPath)
+            try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+            let all = try s.templates()
+            for t in all { try ClipperJSON.encode(t).write(to: url.appendingPathComponent("\(t.id).json")) }
+            Console.line("Wrote \(all.count) templates to \(url.path). Edit one, then `clipper templates validate` and use it with --template file.json.")
+        }
+    }
+
+    struct Save: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(abstract: "Save an edited project timeline as a reusable template.",
+                                                        discussion: "Example: clipper templates save \"3 tips\" --name \"My talking head\"")
+        @OptionGroup var lib: LibraryOptions
+        @Argument(help: "Project name or id prefix.") var project: String
+        @Option(help: "Timeline index within the project.") var timeline = 0
+        @Option(help: "Template name.") var name: String
+        @Option(help: "Template id (default: from the name).") var id: String?
+        @Option(name: .customLong("file"), help: "Also write the JSON to this path.") var file: String?
+
+        func run() async throws {
+            let s = try Services(lib)
+            let p = try s.findProject(project)
+            guard p.timelines.indices.contains(timeline) else { throw ValidationErrorText("Project has \(p.timelines.count) timeline(s)") }
+            let tl = p.timelines[timeline]
+            let based = try tl.provenance.flatMap { prov in try s.templates().first { $0.id == prov.template } }
+            let r = TemplateBuilder.make(from: tl, id: id ?? TemplateBuilder.slug(name), name: name, basedOn: based)
+            try s.library.saveTemplate(r.template)
+            Console.line("Saved template “\(r.template.name)” (\(r.template.id))" + (based.map { ", based on \($0.name)" } ?? ""))
+            Console.line("  slots: " + r.template.slots.map { "\($0.id) [\($0.role.rawValue), \($0.fill.rawValue)]" }.joined(separator: ", "))
+            r.notes.forEach { Console.line("  • \($0)") }
+            if let file { try ClipperJSON.encode(r.template).write(to: URL(fileURLWithPath: (file as NSString).expandingTildeInPath)) }
+        }
+    }
+
+    struct Validate: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(abstract: "Check a template JSON file for mistakes.")
+        @Argument var file: String
+        @Flag(help: "Install it into the library if valid.") var install = false
+        @OptionGroup var lib: LibraryOptions
+        func run() async throws {
+            let data = try Data(contentsOf: URL(fileURLWithPath: (file as NSString).expandingTildeInPath))
+            let (template, issues) = TemplateValidator.decode(data)
+            if issues.isEmpty, let template {
+                Console.line("✓ \(template.name) (\(template.id)) is valid")
+                if install { try Services(lib).library.saveTemplate(template); Console.line("Installed into the library.") }
+            } else {
+                issues.forEach { Console.line("✗ \($0)") }
+                throw ExitCode(1)
+            }
+        }
     }
 }
 

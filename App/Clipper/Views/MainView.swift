@@ -43,6 +43,8 @@ struct MainView: View {
         }
         .sheet(isPresented: $model.exportSheet) { ExportSheet(model: model) }
         .sheet(item: $model.highlightSession) { session in HighlightsSheet(model: model, session: session) }
+        .sheet(isPresented: $model.saveTemplateSheet) { SaveTemplateSheet(model: model) }
+        .sheet(item: $model.templateEdit) { req in TemplateEditorSheet(model: model, original: req.template, isNew: req.isNew) }
         .alert("Clipper", isPresented: Binding(get: { model.alert != nil }, set: { if !$0 { model.alert = nil } })) {
             Button("OK") { model.alert = nil }
         } message: { Text(model.alert ?? "") }
@@ -184,15 +186,25 @@ struct MusicListView: View {
 struct TemplatesView: View {
     @Bindable var model: AppModel
     var body: some View {
+        let mine = model.userTemplateIDs
         List(model.templates) { t in
-            VStack(alignment: .leading, spacing: 4) {
-                HStack {
-                    Text(t.name).font(.headline)
-                    Text("\(t.canvas.width)×\(t.canvas.height) @ \(t.canvas.frameRate)").font(.caption).foregroundStyle(.secondary)
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Text(t.name).font(.headline)
+                        if mine.contains(t.id) { Text("yours").font(.caption2).padding(.horizontal, 5).background(Capsule().fill(Color.accentColor.opacity(0.25))) }
+                        Text("\(t.canvas.width)×\(t.canvas.height) @ \(t.canvas.frameRate)").font(.caption).foregroundStyle(.secondary)
+                    }
+                    Text(t.summary).font(.callout).foregroundStyle(.secondary)
+                    Text("Slots: " + t.slots.map(\.name).joined(separator: ", ") + (t.rules.captions.map { " · captions: \($0.style)" } ?? ""))
+                        .font(.caption).foregroundStyle(.secondary)
                 }
-                Text(t.summary).font(.callout).foregroundStyle(.secondary)
-                Text("Slots: " + t.slots.map(\.name).joined(separator: ", ") + (t.rules.captions.map { " · captions: \($0.style)" } ?? ""))
-                    .font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Button("Duplicate & Edit…") { model.templateEdit = TemplateEditRequest(template: t, isNew: true) }
+                if mine.contains(t.id) {
+                    Button("Edit…") { model.templateEdit = TemplateEditRequest(template: t, isNew: false) }
+                    Button(role: .destructive) { model.deleteTemplate(t.id) } label: { Image(systemName: "trash") }
+                }
             }
             .padding(.vertical, 4)
         }
@@ -243,6 +255,8 @@ struct EditorView: View {
                 Button { zoom = .zoomOut(UUID()) } label: { Label("Zoom Out", systemImage: "minus.magnifyingglass") }
                 Button { zoom = .fit(UUID()) } label: { Label("Fit", systemImage: "arrow.left.and.right") }
                 Button { zoom = .zoomIn(UUID()) } label: { Label("Zoom In", systemImage: "plus.magnifyingglass") }
+                Button { model.saveTemplateSheet = true } label: { Label("Save as Template", systemImage: "rectangle.stack.badge.plus") }
+                    .help("Save this layout, titles, captions and music settings as a reusable template")
                 Button { model.exportSheet = true } label: { Label("Export", systemImage: "square.and.arrow.up") }
             }
         }
