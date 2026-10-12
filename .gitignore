@@ -16,7 +16,7 @@ __pycache__/
 Fixtures/*
 !Fixtures/README.md
 Spikes/out/
-models/
+/models/
 *.gguf
 *.bin
 
