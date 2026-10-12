@@ -1,0 +1,43 @@
+[project]
+name = "clipper-worker"
+version = "0.1.0"
+description = "Clipper's optional Python worker: JSON-RPC 2.0 over stdio for Python-only tools (music generation, beat tracking)."
+requires-python = ">=3.11"
+license = "MIT"
+# The base worker is stdlib-only, so `uv sync` with no extras is tiny. Features are opt-in extras.
+dependencies = []
+
+[project.optional-dependencies]
+# Local AI music generation with ACE-Step 1.5 (MIT code and weights). ACE-Step supports Python 3.11-3.12 only.
+# Pinned to a commit: ACE-Step isn't on PyPI and `main` moves fast.
+music = [
+    "ace-step @ git+https://github.com/ace-step/ACE-Step-1.5@ca1e85fe9430179831e6bc6be790c332190a3866 ; python_version < '3.13'",
+]
+# Beat/downbeat tracking with beat_this (CPJKU; MIT code and weights).
+beats = [
+    "beat-this>=1.0",
+    "torch>=2.4",
+    "torchaudio>=2.4",
+    "soundfile>=0.12",
+]
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[tool.uv]
+# The worker only runs next to the macOS app on Apple Silicon. Restricting resolution keeps uv from trying to
+# resolve ACE-Step's CUDA-only Linux/Windows torch pins.
+environments = ["sys_platform == 'darwin' and platform_machine == 'arm64'"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["clipper_worker"]
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
