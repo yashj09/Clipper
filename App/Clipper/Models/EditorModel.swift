@@ -31,7 +31,11 @@ final class EditorModel {
         self.project = project
         self.assets = assets
         self.settings = settings
-        player.onTime = { [weak self] t in self?.playhead = t }
+        // AVPlayer reports nanosecond times; keep the model on the timeline's frame grid.
+        player.onTime = { [weak self] t in
+            guard let self else { return }
+            self.playhead = t.roundedToFrame(self.timeline.canvas.frameRate)
+        }
         rebuildPreview(immediately: true)
     }
 

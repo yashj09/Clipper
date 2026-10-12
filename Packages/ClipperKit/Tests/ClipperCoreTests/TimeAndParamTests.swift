@@ -98,3 +98,29 @@ import Testing
         #expect(Set(ua).count == 5)
     }
 }
+
+/// Regression: AVPlayer reports nanosecond times (timescale 1e9); cross-multiplying for == / < overflowed Int64
+/// after ~9.2 s of playback and crashed the app (Time.swift:72, "arithmetic overflow").
+@Suite struct RationalTimeOverflowTests {
+    let ns = Int32(1_000_000_000)
+
+    @Test func comparesNanosecondTimesWithoutOverflow() {
+        let player = RationalTime(value: 9_500_000_000, scale: ns)          // 9.5 s from AVPlayer
+        let other = RationalTime(value: 9_533_333_333, scale: ns)
+        #expect(player != other)
+        #expect(player < other)
+        #expect(RationalTime(value: 285, scale: 30) == player)              // 9.5 s at 30 fps
+        #expect(RationalTime(value: 570_000, scale: 60_000) == player)
+        let hour = RationalTime(value: 3_600 * 1_000_000_000, scale: ns)    // long VODs: hours in nanoseconds
+        #expect(hour == RationalTime(value: 3_600, scale: 1))
+        #expect(hour > RationalTime(value: 3_599, scale: 1))
+        #expect(RationalTime.max(hour, player) == hour)
+    }
+
+    @Test func extremeValuesCompareCorrectly() {
+        let big = RationalTime(value: .max / 2, scale: ns), bigger = RationalTime(value: .max / 2 + 1, scale: ns)
+        #expect(big < bigger && big != bigger)
+        #expect(RationalTime(value: -9_000_000_000_000, scale: ns) < RationalTime(value: 1, scale: 1))
+        #expect(RationalTime(value: .max, scale: 1) > RationalTime(value: .max, scale: ns))
+    }
+}

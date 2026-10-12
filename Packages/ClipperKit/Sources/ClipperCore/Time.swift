@@ -64,12 +64,19 @@ public struct RationalTime: Sendable, Comparable, CustomStringConvertible {
         RationalTime(value: Int64((Double(a.value) * k).rounded()), scale: a.scale)
     }
 
-    public static func < (a: RationalTime, b: RationalTime) -> Bool {
-        a.value * Int64(b.scale) < b.value * Int64(a.scale)
-    }
+    public static func < (a: RationalTime, b: RationalTime) -> Bool { compare(a, b) < 0 }
 
-    public static func == (a: RationalTime, b: RationalTime) -> Bool {
-        a.value * Int64(b.scale) == b.value * Int64(a.scale)
+    public static func == (a: RationalTime, b: RationalTime) -> Bool { compare(a, b) == 0 }
+
+    /// Exact comparison of `a.value / a.scale` with `b.value / b.scale` via 128-bit cross products, so it can't
+    /// overflow for any timescale (AVPlayer reports nanoseconds: 9.2 s × 1e9 × 1e9 already exceeds Int64).
+    static func compare(_ a: RationalTime, _ b: RationalTime) -> Int {
+        if a.scale == b.scale { return a.value < b.value ? -1 : (a.value == b.value ? 0 : 1) }
+        let l = a.value.multipliedFullWidth(by: Int64(b.scale))
+        let r = b.value.multipliedFullWidth(by: Int64(a.scale))
+        if l.high != r.high { return l.high < r.high ? -1 : 1 }
+        if l.low != r.low { return l.low < r.low ? -1 : 1 }
+        return 0
     }
 
     public static func min(_ a: RationalTime, _ b: RationalTime) -> RationalTime { a < b ? a : b }
