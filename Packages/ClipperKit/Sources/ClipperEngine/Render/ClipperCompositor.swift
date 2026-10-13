@@ -37,13 +37,16 @@ public final class ClipperCompositor: NSObject, AVVideoCompositing, @unchecked S
     private func render(_ request: AVAsynchronousVideoCompositionRequest) throws {
         guard let instruction = request.videoCompositionInstruction as? RenderInstruction,
               let output = request.renderContext.newPixelBuffer(),
-              let target = gpu.texture(for: output, format: .bgra8Unorm) else {
+              let (target, targetOwner) = gpu.texture(for: output, format: .bgra8Unorm) else {
             throw CocoaError(.featureUnsupported, userInfo: [NSDebugDescriptionErrorKey: "compositor setup failed"])
         }
         let ctx = instruction.context
         let outSize = SIMD2(Double(CVPixelBufferGetWidth(output)), Double(CVPixelBufferGetHeight(output)))
-        // Preview may render below canvas resolution; text is rasterized at canvas size and scaled by this.
-        let renderScale = outSize.x / Double(ctx.canvas.width)
+        // Preview may render below canvas resolution, and a preset of another shape letterboxes the canvas; layers are
+        // laid out in the canvas frame and text (rasterized at canvas size) is scaled by its scale.
+        let canvasFrame = CanvasFrame.fitting(canvas: SIMD2(Double(ctx.canvas.width), Double(ctx.canvas.height)), in: outSize)
+        let canvasSize = canvasFrame.size
+        let renderScale = canvasFrame.scale
         let now = RationalTime(request.compositionTime)
 
         let pass = MTLRenderPassDescriptor()
@@ -56,7 +59,13 @@ public final class ClipperCompositor: NSObject, AVVideoCompositing, @unchecked S
             throw CocoaError(.featureUnsupported)
         }
         enc.setRenderPipelineState(gpu.pipeline)
-        var retained: [AnyObject] = [output]
+        if canvasFrame.isLetterboxed {
+            // Keep layers that extend past the canvas edge out of the bars, as the preview clips them at the canvas.
+            enc.setScissorRect(MTLScissorRect(x: Int(canvasFrame.origin.x), y: Int(canvasFrame.origin.y),
+                                              width: min(Int(canvasSize.x.rounded()), Int(outSize.x) - Int(canvasFrame.origin.x)),
+                                              height: min(Int(canvasSize.y.rounded()), Int(outSize.y) - Int(canvasFrame.origin.y))))
+        }
+        var retained: [AnyObject] = [output, targetOwner]
 
         for layer in instruction.layers {
             let local = now - layer.start
@@ -71,20 +80,21 @@ public final class ClipperCompositor: NSObject, AVVideoCompositing, @unchecked S
             switch layer.source {
             case .media(let trackID, let displaySize, let orient, let tf):
                 guard let frame = request.sourceFrame(byTrackID: trackID),
-                      let tex = gpu.texture(for: frame, format: .rgba16Float) else { continue }
+                      let (tex, owner) = gpu.texture(for: frame, format: .rgba16Float) else { continue }
                 texture = tex
                 retained.append(frame)
+                retained.append(owner)
                 transfer = Self.transferCode(of: frame, fallback: tf)
                 orientation = orient
-                geometry = .media(transform: layer.transform, at: local, canvas: outSize, sourceSize: displaySize)
+                geometry = .media(transform: layer.transform, at: local, canvas: canvasSize, sourceSize: displaySize)
             case .image(let url, let displaySize):
                 guard let tex = gpu.imageTexture(url) else { continue }
                 texture = tex
-                geometry = .media(transform: layer.transform, at: local, canvas: outSize, sourceSize: displaySize)
+                geometry = .media(transform: layer.transform, at: local, canvas: canvasSize, sourceSize: displaySize)
             case .solid(let color):
                 texture = gpu.white
                 tint = SIMD4(Float(color.r * color.a), Float(color.g * color.a), Float(color.b * color.a), Float(color.a))
-                geometry = .media(transform: layer.transform, at: local, canvas: outSize, sourceSize: outSize)
+                geometry = .media(transform: layer.transform, at: local, canvas: canvasSize, sourceSize: canvasSize)
             case .text(let content):
                 guard let style = ctx.styles[content.style] else { continue }
                 let words = content.text.split(separator: " ").map(String.init)
@@ -92,7 +102,7 @@ public final class ClipperCompositor: NSObject, AVVideoCompositing, @unchecked S
                                       canvas: SIMD2(ctx.canvas.width, ctx.canvas.height), options: .init())
                 guard let tex = gpu.textTexture(key, style: style) else { continue }
                 texture = tex
-                geometry = .text(transform: layer.transform, at: local, canvas: outSize,
+                geometry = .text(transform: layer.transform, at: local, canvas: canvasSize,
                                  textureSize: SIMD2(Double(tex.width), Double(tex.height)), extraScale: renderScale)
             case .caption(let caption):
                 guard let style = ctx.styles[caption.style] else { continue }
@@ -105,12 +115,13 @@ public final class ClipperCompositor: NSObject, AVVideoCompositing, @unchecked S
                                                      revealUpTo: style.animation == .wordByWord ? state.active : nil))
                 guard let tex = gpu.textTexture(key, style: style) else { continue }
                 texture = tex
-                geometry = .text(transform: layer.transform, at: local, canvas: outSize,
+                geometry = .text(transform: layer.transform, at: local, canvas: canvasSize,
                                  textureSize: SIMD2(Double(tex.width), Double(tex.height)), extraScale: renderScale * state.scale)
             }
 
             var uniforms = LayerUniforms()
-            let ndc = geometry.corners.map { SIMD2<Float>(Float($0.x / outSize.x * 2 - 1), Float(1 - $0.y / outSize.y * 2)) }
+            let ndc = geometry.corners.map { $0 + canvasFrame.origin }
+                .map { SIMD2<Float>(Float($0.x / outSize.x * 2 - 1), Float(1 - $0.y / outSize.y * 2)) }
             let r = geometry.sourceRect
             let display: [SIMD2<Double>] = [SIMD2(r.x, r.y), SIMD2(r.x + r.width, r.y), SIMD2(r.x, r.y + r.height),
                                             SIMD2(r.x + r.width, r.y + r.height)]
@@ -131,9 +142,11 @@ public final class ClipperCompositor: NSObject, AVVideoCompositing, @unchecked S
         CVBufferSetAttachment(output, kCVImageBufferYCbCrMatrixKey, kCVImageBufferYCbCrMatrix_ITU_R_709_2, .shouldPropagate)
 
         let req = UncheckedSendable(request), out = UncheckedSendable(output), keep = UncheckedSendable(retained)
+        let gpu = self.gpu
         cmd.addCompletedHandler { _ in
             _ = keep
             req.value.finish(withComposedVideoFrame: out.value)
+            gpu.flushTextureCache()
         }
         cmd.commit()
     }

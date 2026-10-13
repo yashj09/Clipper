@@ -17,7 +17,10 @@ final class GPU: @unchecked Sendable {
     private var textCache: [TextKey: MTLTexture] = [:]
     private var textOrder: [TextKey] = []
     private var imageCache: [URL: MTLTexture] = [:]
+    private var imageOrder: [URL] = []
     static let textCacheLimit = 512
+    /// Decoded stills are up to 4096² (64 MB each): keep only the most recently used few.
+    static let imageCacheLimit = 16
 
     struct TextKey: Hashable {
         var words: [String]
@@ -53,13 +56,18 @@ final class GPU: @unchecked Sendable {
         white.replace(region: MTLRegionMake2D(0, 0, 1, 1), mipmapLevel: 0, withBytes: &px, bytesPerRow: 4)
     }
 
-    func texture(for buffer: CVPixelBuffer, format: MTLPixelFormat) -> MTLTexture? {
+    /// A Metal view of `buffer`. The `CVMetalTexture` must stay alive until the GPU has finished with the texture
+    /// (keep it with the command buffer), or its backing may be recycled mid-render.
+    func texture(for buffer: CVPixelBuffer, format: MTLPixelFormat) -> (texture: MTLTexture, owner: CVMetalTexture)? {
         var tex: CVMetalTexture?
         let status = CVMetalTextureCacheCreateTextureFromImage(nil, textureCache, buffer, nil, format,
                                                                 CVPixelBufferGetWidth(buffer), CVPixelBufferGetHeight(buffer), 0, &tex)
-        guard status == kCVReturnSuccess, let tex else { return nil }
-        return CVMetalTextureGetTexture(tex)
+        guard status == kCVReturnSuccess, let tex, let metal = CVMetalTextureGetTexture(tex) else { return nil }
+        return (metal, tex)
     }
+
+    /// Releases texture-cache entries no longer in use; call after a frame completes.
+    func flushTextureCache() { CVMetalTextureCacheFlush(textureCache, 0) }
 
     func makeTexture(_ image: CGImage) -> MTLTexture? {
         let w = image.width, h = image.height
@@ -90,7 +98,13 @@ final class GPU: @unchecked Sendable {
 
     /// Still images, decoded upright (EXIF applied) and capped at 4096 px.
     func imageTexture(_ url: URL) -> MTLTexture? {
-        if let hit = lock.withLock({ imageCache[url] }) { return hit }
+        let hit = lock.withLock { () -> MTLTexture? in
+            guard let tex = imageCache[url] else { return nil }
+            imageOrder.removeAll { $0 == url }
+            imageOrder.append(url)
+            return tex
+        }
+        if let hit { return hit }
         guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
               let image = CGImageSourceCreateThumbnailAtIndex(src, 0, [
                   kCGImageSourceCreateThumbnailFromImageAlways: true,
@@ -98,7 +112,10 @@ final class GPU: @unchecked Sendable {
                   kCGImageSourceThumbnailMaxPixelSize: 4096,
               ] as CFDictionary),
               let tex = makeTexture(image) else { return nil }
-        lock.withLock { imageCache[url] = tex }
+        lock.withLock {
+            if imageCache.updateValue(tex, forKey: url) == nil { imageOrder.append(url) }
+            if imageOrder.count > Self.imageCacheLimit { imageCache[imageOrder.removeFirst()] = nil }
+        }
         return tex
     }
 }

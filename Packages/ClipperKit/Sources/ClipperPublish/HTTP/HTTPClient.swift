@@ -53,6 +53,18 @@ public struct RetryPolicy: Sendable {
         return [.timedOut, .networkConnectionLost, .notConnectedToInternet, .cannotConnectToHost,
                 .dnsLookupFailed, .cannotFindHost, .resourceUnavailable].contains(error.code)
     }
+
+    /// Failures that happen before the request reaches the server, so even a non-idempotent request is safe to resend.
+    static func wasNotSent(_ error: Error) -> Bool {
+        guard let error = error as? URLError else { return false }
+        return [.notConnectedToInternet, .cannotConnectToHost, .dnsLookupFailed, .cannotFindHost].contains(error.code)
+    }
+
+    /// Methods that can be repeated without a second side effect (RFC 9110 §9.2.2). POSTs aren't: resending one after
+    /// a lost connection or timeout can replay a one-time authorization code or create a second TikTok upload.
+    static func isIdempotent(_ request: URLRequest) -> Bool {
+        ["GET", "HEAD", "PUT", "DELETE", "OPTIONS"].contains((request.httpMethod ?? "GET").uppercased())
+    }
 }
 
 /// Thin URLSession wrapper: never follows redirects (YouTube's "308 Resume Incomplete" must reach the caller), ephemeral
@@ -82,21 +94,25 @@ struct HTTPClient: Sendable {
         return (data, http)
     }
 
-    /// Sends a request built by `make` (rebuilt per attempt so tokens stay fresh), retrying transient failures.
+    /// Sends a request built by `make` (rebuilt per attempt so tokens stay fresh), retrying transient failures. A
+    /// non-idempotent request (POST) is only resent after a connection error when it can't have reached the server.
     func sendWithRetry(_ policy: RetryPolicy, body: Data? = nil,
                        make: () async throws -> URLRequest) async throws -> (Data, HTTPURLResponse) {
         var attempt = 0
         while true {
             try Task.checkCancellation()
+            var idempotent = true
             do {
-                let result = try await send(try await make(), body: body)
+                let request = try await make()
+                idempotent = RetryPolicy.isIdempotent(request)
+                let result = try await send(request, body: body)
                 if RetryPolicy.isTransient(status: result.1.statusCode), attempt < policy.maxRetries {
                     attempt += 1
                     try await Task.sleep(for: policy.delay(forAttempt: attempt))
                     continue
                 }
                 return result
-            } catch where RetryPolicy.isTransient(error) && attempt < policy.maxRetries {
+            } catch where RetryPolicy.isTransient(error) && (idempotent || RetryPolicy.wasNotSent(error)) && attempt < policy.maxRetries {
                 attempt += 1
                 try await Task.sleep(for: policy.delay(forAttempt: attempt))
             }

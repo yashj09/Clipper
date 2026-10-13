@@ -9,6 +9,8 @@ public struct TextLayout: Sendable {
     public var size: CGSize
     public var words: [Word]
     public var lines: [CGRect]
+    /// Point size the block is set in (the style's size, or smaller to respect `maxLines`).
+    public var fontSize: Double
 }
 
 /// Renders titles and caption pages with Core Text into premultiplied BGRA images.
@@ -36,30 +38,30 @@ public enum TextRenderer {
         return p
     }
 
-    /// Greedy word wrap within `style.maxWidth` of the canvas, capped at `style.maxLines` lines for captions.
+    /// Smallest size the text may shrink to (relative to the style's size) to respect `maxLines`.
+    static let minimumShrink = 0.5
+
+    /// Greedy word wrap within `style.maxWidth` of the canvas. When that takes more than `style.maxLines` lines, the
+    /// font is shrunk (down to half the style's size) until the text fits; words are never dropped.
     /// Right-to-left text (Hebrew, Arabic…) keeps its logical word order but places words right to left on each line;
     /// each word's own glyphs are shaped by Core Text.
     public static func layout(words input: [String], style: TextStyle, canvasWidth: Int, canvasHeight: Int) -> TextLayout {
-        let font = font(style, canvasHeight: canvasHeight)
-        let fontSize = CTFontGetSize(font)
         let words = input.map { style.uppercase ? $0.uppercased() : $0 }
-        func width(_ s: String) -> Double {
-            let line = CTLineCreateWithAttributedString(NSAttributedString(string: s, attributes: [.init(kCTFontAttributeName as String): font]))
-            return CTLineGetTypographicBounds(line, nil, nil, nil)
-        }
-        let space = width(" ")
         let maxW = style.maxWidth * Double(canvasWidth)
-        var lines: [[Int]] = [[]]
-        var lineW: [Double] = [0]
-        let wordW = words.map(width)
-        for (i, w) in wordW.enumerated() {
-            let add = lines[lines.count - 1].isEmpty ? w : lineW[lineW.count - 1] + space + w
-            if add > maxW && !lines[lines.count - 1].isEmpty {
-                lines.append([i]); lineW.append(w)
-            } else {
-                lines[lines.count - 1].append(i); lineW[lineW.count - 1] = add
+        let base = font(style, canvasHeight: canvasHeight)
+        var font = base
+        var wrapped = wrap(words, font: font, maxWidth: maxW)
+        if style.maxLines > 0 {
+            let minimum = CTFontGetSize(base) * minimumShrink
+            var size = CTFontGetSize(base)
+            while wrapped.lines.count > style.maxLines && size > minimum {
+                size = max(minimum, size * 0.92)
+                font = CTFontCreateCopyWithAttributes(base, size, nil, nil)
+                wrapped = wrap(words, font: font, maxWidth: maxW)
             }
         }
+        let fontSize = CTFontGetSize(font)
+        let (lines, lineW, wordW, space) = (wrapped.lines, wrapped.lineWidths, wrapped.wordWidths, wrapped.space)
         let ascent = CTFontGetAscent(font), descent = CTFontGetDescent(font)
         let lineHeight = (ascent + descent) * style.lineSpacing
         let pad = padding(style, fontSize: fontSize)
@@ -86,7 +88,29 @@ public enum TextRenderer {
                 x += wordW[i] + space
             }
         }
-        return TextLayout(size: size, words: outWords, lines: lineRects)
+        return TextLayout(size: size, words: outWords, lines: lineRects, fontSize: fontSize)
+    }
+
+    /// Greedy wrap of `words` in `font` within `maxWidth`: word indices per line, line and word widths, space width.
+    private static func wrap(_ words: [String], font: CTFont, maxWidth maxW: Double)
+        -> (lines: [[Int]], lineWidths: [Double], wordWidths: [Double], space: Double) {
+        func width(_ s: String) -> Double {
+            let line = CTLineCreateWithAttributedString(NSAttributedString(string: s, attributes: [.init(kCTFontAttributeName as String): font]))
+            return CTLineGetTypographicBounds(line, nil, nil, nil)
+        }
+        let space = width(" ")
+        var lines: [[Int]] = [[]]
+        var lineW: [Double] = [0]
+        let wordW = words.map(width)
+        for (i, w) in wordW.enumerated() {
+            let add = lines[lines.count - 1].isEmpty ? w : lineW[lineW.count - 1] + space + w
+            if add > maxW && !lines[lines.count - 1].isEmpty {
+                lines.append([i]); lineW.append(w)
+            } else {
+                lines[lines.count - 1].append(i); lineW[lineW.count - 1] = add
+            }
+        }
+        return (lines, lineW, wordW, space)
     }
 
     /// Renders a text block. `emphasis[i]` marks keyword words drawn in the style's emphasis colour.
@@ -102,8 +126,9 @@ public enum TextRenderer {
         ctx.translateBy(x: 0, y: CGFloat(h))
         ctx.scaleBy(x: 1, y: -1)
 
-        let font = font(style, canvasHeight: canvasHeight)
-        let fontSize = CTFontGetSize(font)
+        // The size layout settled on (it may have shrunk the style's size to respect maxLines).
+        let font = CTFontCreateCopyWithAttributes(font(style, canvasHeight: canvasHeight), layout.fontSize, nil, nil)
+        let fontSize = layout.fontSize
         let descent = CTFontGetDescent(font)
         let visible: (Int) -> Bool = { i in options.revealUpTo.map { i <= $0 } ?? true }
 

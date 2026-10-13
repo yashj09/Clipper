@@ -58,6 +58,30 @@ public struct LayerGeometry: Equatable, Sendable {
     }
 }
 
+/// Where the timeline's canvas lands in an output frame. When the aspect ratios match (preview at a reduced scale,
+/// presets of the canvas's shape) it fills the frame; otherwise it is scaled to fit and centred — letterboxed or
+/// pillarboxed — so a preset of another shape never re-crops the layout or distorts text.
+public struct CanvasFrame: Equatable, Sendable {
+    /// Top-left of the canvas in output pixels (y down).
+    public var origin: SIMD2<Double>
+    /// Size of the canvas in output pixels.
+    public var size: SIMD2<Double>
+    /// Output pixels per canvas pixel (text is rasterized at canvas size and scaled by this).
+    public var scale: Double
+
+    public var isLetterboxed: Bool { origin != .zero }
+
+    public static func fitting(canvas: SIMD2<Double>, in output: SIMD2<Double>) -> CanvasFrame {
+        guard canvas.x > 0, canvas.y > 0, output.x > 0, output.y > 0 else { return CanvasFrame(origin: .zero, size: output, scale: 1) }
+        let sx = output.x / canvas.x, sy = output.y / canvas.y
+        // Same shape up to rounding (even-sized preview buffers): fill exactly, as before.
+        if abs(sx / sy - 1) <= 0.01 { return CanvasFrame(origin: .zero, size: output, scale: sx) }
+        let scale = min(sx, sy)
+        let size = canvas * scale
+        return CanvasFrame(origin: ((output - size) / 2).rounded(.down), size: size, scale: scale)
+    }
+}
+
 /// Maps display-oriented normalized source coordinates to the stored (natural) texture coordinates.
 public struct Orientation: Equatable, Sendable {
     public var rotation: Int

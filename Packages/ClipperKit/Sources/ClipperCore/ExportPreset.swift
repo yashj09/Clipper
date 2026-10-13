@@ -65,4 +65,17 @@ public struct ExportPreset: Codable, Sendable, Equatable, Identifiable {
     ]
 
     public static func named(_ id: String) -> ExportPreset? { builtIn.first { $0.id == id } }
+
+    /// The preset with the user's export settings applied (no caption sidecars when they're turned off).
+    public func applying(_ settings: ClipperSettings.Export) -> ExportPreset {
+        var p = self
+        if !settings.writeSidecars { p.sidecars = [] }
+        return p
+    }
+
+    /// False when the preset has a fixed size whose aspect ratio differs from the canvas (the export is letterboxed).
+    public func matchesAspect(of canvas: Canvas) -> Bool {
+        guard let width, let height, width > 0, height > 0, canvas.height > 0 else { return true }
+        return abs(Double(width) / Double(height) - canvas.aspect) <= 0.01 * canvas.aspect
+    }
 }

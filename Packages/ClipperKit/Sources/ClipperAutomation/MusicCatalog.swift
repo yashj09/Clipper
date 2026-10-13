@@ -40,9 +40,20 @@ public enum IncompetechCatalog {
             let parts = length.split(separator: ":").compactMap { Double($0) }
             return parts.reduce(0) { $0 * 60 + $1 }
         }
-        public var downloadURL: URL {
-            let name = filename.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed.subtracting(CharacterSet(charactersIn: "'&?#"))) ?? filename
-            return URL(string: "https://incompetech.com/music/royalty-free/mp3-royaltyfree/\(name)")!
+        /// `filename` when it is safe to use as a file name in the library: the catalog is remote data, so anything with
+        /// a path separator, a leading dot ("..", hidden files) or control characters is refused (nil).
+        public var localFileName: String? {
+            let unsafe = filename.isEmpty || filename.utf8.count > 255 || filename.hasPrefix(".")
+                || filename.contains { $0 == "/" || $0 == "\\" || $0 == ":" || $0.unicodeScalars.contains { $0.properties.generalCategory == .control } }
+            return unsafe ? nil : filename
+        }
+
+        /// Where the MP3 is downloaded from (nil when the catalog's file name is unsafe or can't form a URL).
+        public var downloadURL: URL? {
+            guard let file = localFileName,
+                  let name = file.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed.subtracting(CharacterSet(charactersIn: "'&?#")))
+            else { return nil }
+            return URL(string: "https://incompetech.com/music/royalty-free/mp3-royaltyfree/\(name)")
         }
         /// The attribution text the licence requires.
         public var attribution: String {
@@ -67,6 +78,7 @@ public enum IncompetechCatalog {
         for mood in moods {
             let candidates = pieces
                 .filter { (90...240).contains($0.seconds) && $0.moods.contains(mood) && !used.contains($0.title) }
+                .filter { $0.downloadURL != nil }
                 // Keep dark/eerie pieces out of the light moods.
                 .filter { ["cinematic", "mysterious", "dark", "intense"].contains(mood) || !$0.moods.contains("dark") }
                 .filter { p in p.bpm.flatMap(Double.init).map { (70...150).contains($0) } ?? false }

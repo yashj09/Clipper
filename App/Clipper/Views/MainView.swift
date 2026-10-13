@@ -266,7 +266,6 @@ struct EditorView: View {
     @Bindable var model: AppModel
     @Bindable var editor: EditorModel
     @State private var zoom: TimelineView.ZoomRequest? = .fit(UUID())
-    @Environment(\.undoManager) private var undoManager
 
     var body: some View {
         VSplitView {
@@ -276,7 +275,6 @@ struct EditorView: View {
             }
             TimelineView(editor: editor, zoomRequest: zoom).frame(minHeight: 220, idealHeight: 320)
         }
-        .onAppear { editor.undoManager = undoManager }
         .navigationTitle(editor.project.name)
         .toolbar {
             ToolbarItem(placement: .navigation) {

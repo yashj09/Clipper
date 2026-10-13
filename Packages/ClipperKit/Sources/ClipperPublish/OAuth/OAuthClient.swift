@@ -99,7 +99,9 @@ public struct OAuthClient: Sendable {
         let server = LoopbackHTTPServer(maxBodySize: 64 << 10) { request in
             guard request.path == redirectPath else { return HTTPServerResponse(status: 404) }
             let outcome = Self.callbackOutcome(request, expectedState: state)
-            continuation.yield(outcome)
+            // Only the redirect carrying our state settles the sign-in; anything else hitting the callback (a stray or
+            // forged request, a stale tab) is answered with an error page and the flow keeps waiting.
+            if outcome != .failure(.stateMismatch) { continuation.yield(outcome) }
             switch outcome {
             case .success: return .html(Self.page(title: "Signed in to Clipper",
                                                   message: "You can close this window and return to Clipper."))

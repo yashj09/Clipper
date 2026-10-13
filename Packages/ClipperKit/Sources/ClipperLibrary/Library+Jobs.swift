@@ -9,6 +9,8 @@ public enum JobStatus: String, Codable, Sendable, CaseIterable {
 
 /// A persisted long-running job (analysis, export…), so the UI and CLI can list and resume work.
 /// `payload` is opaque to the library (typically JSON the job's owner knows how to decode).
+///
+/// Scaffolding: the table and API exist (and are tested), but neither the app nor the CLI records jobs yet.
 public struct JobRecord: Codable, Sendable, Equatable, Identifiable {
     public var id: UUID
     public var kind: String

@@ -31,7 +31,10 @@ enum Captions {
 
         var items: [Item] = []
         for (i, page) in pages.enumerated() {
-            let start = RationalTime.frames(page[0].start, rate).floorToFrame(rate)
+            var start = RationalTime.frames(page[0].start, rate).floorToFrame(rate)
+            // Pages whose first words fall in the same frame (zero-length or tightly packed ASR words): start a frame
+            // after the previous page so that one keeps at least a frame instead of shrinking to nothing and vanishing.
+            if let prev = items.last, start <= prev.start { start = prev.start + rate.frameDuration }
             var endSeconds = max(page.last!.end + 0.15, start.seconds + 0.3)
             if i + 1 < pages.count { endSeconds = min(endSeconds, pages[i + 1][0].start) }
             var end = RationalTime.frames(endSeconds, rate)

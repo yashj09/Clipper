@@ -32,7 +32,9 @@ public enum TemplateBuilder {
             let items = track.items.filter { $0.content.mediaRef != nil }
             guard let first = items.first else { continue }
             let isPrimary = track.id == primaryTrack?.id
-            var slotID = Set(items.compactMap(\.slot)).count == 1 ? items[0].slot! : slug(track.name)
+            // The track's slot when all its slotted items agree (manual clips without a slot don't count), else its name.
+            let slotIDs = Set(items.compactMap(\.slot))
+            var slotID = slotIDs.count == 1 ? slotIDs.first! : slug(track.name)
             while usedIDs.contains(slotID) { slotID += "-2" }
             usedIDs.insert(slotID)
             let based = basedOn?.slots.first { $0.id == slotID }

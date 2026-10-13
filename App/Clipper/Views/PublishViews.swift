@@ -16,6 +16,11 @@ struct PublishSheet: View {
     @State private var when: Date = Date().addingTimeInterval(3600)
     @State private var later = false
 
+    /// What `ScheduledPost` would reject (no platform; Instagram with a non-public visibility).
+    private var draftProblems: [String] {
+        ScheduledPost(projectID: UUID(), platforms: Array(selected), title: title, visibility: visibility, scheduledAt: when).problems
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Publish").font(.title2.bold())
@@ -37,7 +42,11 @@ struct PublishSheet: View {
                 Picker("Visibility", selection: $visibility) {
                     Text("Private").tag(ClipperPublish.Visibility.private); Text("Unlisted").tag(ClipperPublish.Visibility.unlisted); Text("Public").tag(ClipperPublish.Visibility.public)
                 }
-                if selected.contains(.instagram) { Text("Instagram Reels are always public.").font(.caption).foregroundStyle(.secondary) }
+                if selected.contains(.instagram), visibility != .public {
+                    Text("Instagram Reels are always public: choose Public, or untick Instagram.").font(.caption).foregroundStyle(.orange)
+                } else if selected.contains(.instagram) {
+                    Text("Instagram Reels are always public.").font(.caption).foregroundStyle(.secondary)
+                }
                 if selected.contains(.tiktok) { Text("TikTok receives a draft in your inbox; you finish the post in the TikTok app.").font(.caption).foregroundStyle(.secondary) }
                 Toggle("Schedule for later", isOn: $later)
                 if later { DatePicker("When", selection: $when, in: Date()...) }
@@ -57,12 +66,12 @@ struct PublishSheet: View {
                                              tags: tags.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty },
                                              visibility: visibility, scheduledAt: later ? when : Date(),
                                              presetID: editor.timeline.provenance.flatMap { p in model.templates.first { $0.id == p.template }?.exportPreset } ?? model.settings.export.defaultPreset)
-                    model.schedule(post)
+                    let queued = model.schedule(post)
                     dismiss()
-                    if !later { Task { await model.execute(post) } }
+                    if queued, !later { Task { await model.execute(post) } }
                 }
                 .keyboardShortcut(.defaultAction)
-                .disabled(selected.isEmpty || title.trimmingCharacters(in: .whitespaces).isEmpty)
+                .disabled(!draftProblems.isEmpty || title.trimmingCharacters(in: .whitespaces).isEmpty)
             }
         }
         .padding(20).frame(width: 560)
@@ -93,6 +102,7 @@ struct PublishingView: View {
         }
         .contextMenu(forSelectionType: ScheduledPost.ID.self) { ids in
             Button("Publish Now") { for id in ids { if let p = posts.first(where: { $0.id == id }) { Task { await model.execute(p); reload() } } } }
+                .disabled(ids.contains { id in posts.first { $0.id == id }?.status.isRunning == true })
             Button("Cancel", role: .destructive) { for id in ids { try? model.publishQueue?.update(id) { $0.status = .cancelled } }; reload() }
         }
         .overlay { if posts.isEmpty { ContentUnavailableView("Nothing scheduled", systemImage: "calendar", description: Text("Open a project and choose Publish… to post now or schedule.")) } }
@@ -109,7 +119,7 @@ struct PublishingView: View {
             }
         }
         .navigationTitle("Publishing")
-        .task { reload() }
+        .task { model.recoverInterruptedPosts(); reload() }
     }
 
     private func reload() { posts = ((try? model.publishQueue?.posts()) ?? []).reversed() }

@@ -2,12 +2,14 @@ import SwiftUI
 
 @main
 struct ClipperApp: App {
+    @NSApplicationDelegateAdaptor private var appDelegate: AppDelegate
     @State private var model = AppModel()
 
     var body: some Scene {
         WindowGroup("Clipper") {
             MainView(model: model)
                 .frame(minWidth: 1100, minHeight: 720)
+                .onAppear { appDelegate.model = model }
         }
         .windowToolbarStyle(.unified)
         .commands {
@@ -34,4 +36,10 @@ struct ClipperApp: App {
             SettingsView(model: model)
         }
     }
+}
+
+/// Flushes the editor's debounced autosave when the app quits.
+@MainActor final class AppDelegate: NSObject, NSApplicationDelegate {
+    weak var model: AppModel?
+    func applicationWillTerminate(_ notification: Notification) { model?.prepareForTermination() }
 }

@@ -53,8 +53,11 @@ extension AppModel {
 
     // MARK: Queue
 
-    func schedule(_ post: ScheduledPost) {
-        do { try publishQueue?.add(post); writeCalendar() } catch { alert = "Couldn't schedule: \(error)" }
+    /// Adds the post to the queue; false (with an alert) if it couldn't be stored.
+    @discardableResult
+    func schedule(_ post: ScheduledPost) -> Bool {
+        guard let q = publishQueue else { return false }
+        do { try q.add(post); writeCalendar(); return true } catch { alert = "Couldn't schedule: \(error)"; return false }
     }
 
     func writeCalendar() {
@@ -63,59 +66,76 @@ extension AppModel {
                                               atomically: true, encoding: .utf8)
     }
 
+    /// The shared runner (claims posts, so the LaunchAgent's `run-due` and the app never publish one twice). Exports
+    /// always write caption sidecars: YouTube uploads them as captions.
+    func publishRunner(_ q: PublishQueue, library: Library) -> PublishRunner {
+        let store = credentialStore
+        return PublishRunner(queue: q, loadTimeline: { post in
+            let project = try library.loadProject(post.projectID)
+            guard project.timelines.indices.contains(post.timelineIndex) else {
+                throw CocoaError(.fileReadNoSuchFile, userInfo: [NSLocalizedDescriptionKey: "Timeline \(post.timelineIndex + 1) no longer exists in “\(project.name)”."])
+            }
+            return project.timelines[post.timelineIndex]
+        }, export: { timeline, preset, url in
+            let assets = Dictionary(uniqueKeysWithValues: try library.assets().map { ($0.id, $0) })
+            return try await Exporter.export(timeline, assets: assets, preset: preset, to: url) { p in
+                Task { @MainActor in self.activity?.progress = p.fraction }
+            }.url
+        }, publisher: { platform in
+            try PublisherFactory.publisher(for: platform, store: store)
+        }, events: { event in
+            await MainActor.run {
+                switch event {
+                case .exporting(let post): self.activity = Activity(title: "Exporting", detail: post.title, progress: 0)
+                case .uploading(let post, let platform):
+                    self.activity = Activity(title: "Uploading to \(platform.displayName)", detail: post.title, progress: 0)
+                case .published, .failed: break
+                }
+            }
+        }, progress: { _, p in
+            Task { @MainActor in self.activity?.progress = p.fraction; self.activity?.detail = p.message }
+        })
+    }
+
     func runDuePosts() async {
-        guard let q = publishQueue, let due = try? q.due() else { return }
-        for post in due { await execute(post) }
+        guard let library, let q = publishQueue else { return }
+        do {
+            let done = try await publishRunner(q, library: library).runDue()
+            activity = nil
+            writeCalendar()
+            if done.isEmpty { alert = "Nothing due (or already being published by the LaunchAgent)." }
+            else { alert = done.map(summary).joined(separator: "\n\n") }
+        } catch {
+            activity = nil
+            alert = "Publishing failed: \(error)"
+        }
     }
 
     /// Exports the post's timeline (once) and uploads it to each remaining platform, recording results in the queue.
+    /// Does nothing if the post is already being published (e.g. by the LaunchAgent) or is finished.
     func execute(_ post: ScheduledPost) async {
         guard let library, let q = publishQueue else { return }
         do {
-            let project = try library.loadProject(post.projectID)
-            let timeline = project.timelines[post.timelineIndex]
-            var file = post.exportedFile
-            if file == nil || !FileManager.default.fileExists(atPath: file!.path) {
-                try q.update(post.id) { $0.status = .exporting }
-                guard let preset = ExportPreset.named(post.presetID) else { throw CocoaError(.featureUnsupported) }
-                let out = q.url.deletingLastPathComponent().appendingPathComponent("Exports/\(post.id.uuidString.prefix(8)).mp4")
-                activity = Activity(title: "Exporting", detail: post.title, progress: 0)
-                let result = try await Exporter.export(timeline, assets: allAssets, preset: preset, to: out) { p in
-                    Task { @MainActor in self.activity?.progress = p.fraction }
-                }
-                file = result.url
-                try q.update(post.id) { $0.exportedFile = file }
-            }
-            try q.update(post.id) { $0.status = .uploading }
-            let captions = ((try? FileManager.default.contentsOfDirectory(at: file!.deletingLastPathComponent(), includingPropertiesForKeys: nil)) ?? [])
-                .filter { $0.pathExtension == "srt" && $0.lastPathComponent.hasPrefix(file!.deletingPathExtension().lastPathComponent) }
-            for platform in post.remainingPlatforms {
-                activity = Activity(title: "Uploading to \(platform.displayName)", detail: post.title, progress: 0)
-                let request = PublishRequest(file: file!, title: post.title, description: post.description, tags: post.tags,
-                                             visibility: platform == .instagram ? .public : post.visibility,
-                                             captions: captions, attributions: timeline.attributions)
-                do {
-                    let publisher = try PublisherFactory.publisher(for: platform, store: credentialStore)
-                    let result = try await publisher.publish(request) { p in
-                        Task { @MainActor in self.activity?.progress = p.fraction; self.activity?.detail = p.message }
-                    }
-                    try q.update(post.id) { $0.results.append(result); $0.errors[platform.rawValue] = nil }
-                } catch {
-                    try q.update(post.id) { $0.errors[platform.rawValue] = "\(error)" }
-                }
-            }
-            try q.update(post.id) { p in p.status = p.remainingPlatforms.isEmpty ? .posted : (p.results.isEmpty ? .failed : .partial) }
+            let done = try await publishRunner(q, library: library).run(post.id)
+            activity = nil
+            writeCalendar()
+            alert = done.map(summary) ?? "“\(post.title)” is already being published or is no longer pending."
         } catch {
-            try? q.update(post.id) { $0.status = .failed; $0.errors["export"] = "\(error)" }
+            activity = nil
             alert = "Publishing “\(post.title)” failed: \(error)"
         }
-        activity = nil
+    }
+
+    private func summary(_ done: ScheduledPost) -> String {
+        let lines = done.results.map { "✓ \($0.platform.displayName): \($0.url?.absoluteString ?? $0.remoteID)\n   \($0.status)" }
+            + done.errors.sorted { $0.key < $1.key }.map { "⚠️ \($0.key): \($0.value)" }
+        return "“\(done.title)”\n\n" + lines.joined(separator: "\n")
+    }
+
+    /// Puts posts whose run was cut short (the app or CLI quit mid-publish) back in the queue.
+    func recoverInterruptedPosts() {
+        guard let q = publishQueue, let recovered = try? q.recoverInterrupted(), !recovered.isEmpty else { return }
         writeCalendar()
-        if let done = try? q.posts().first(where: { $0.id == post.id }) {
-            let lines = done.results.map { "✓ \($0.platform.displayName): \($0.url?.absoluteString ?? $0.remoteID)\n   \($0.status)" }
-                + done.errors.map { "⚠️ \($0.key): \($0.value)" }
-            alert = "“\(done.title)”\n\n" + lines.joined(separator: "\n")
-        }
     }
 
     // MARK: Interchange

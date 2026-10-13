@@ -43,6 +43,14 @@ struct Publish: AsyncParsableCommand {
 
         func run() async throws {
             let s = try Services(lib)
+            let post = try makePost(s)
+            try Publish.queue(s).add(post)
+            let df = DateFormatter(); df.dateStyle = .medium; df.timeStyle = .short
+            Console.line("Scheduled “\(post.title)” for \(df.string(from: post.scheduledAt)) → \(post.platforms.map(\.displayName).joined(separator: ", ")) (\(post.id.uuidString.prefix(8)))")
+        }
+
+        /// The validated post these options describe (not yet queued).
+        func makePost(_ s: Services) throws -> ScheduledPost {
             let p = try s.findProject(project)
             guard p.timelines.indices.contains(timeline) else { throw ValidationErrorText("Project has \(p.timelines.count) timeline(s)") }
             let platforms = try to.split(separator: ",").map { raw -> Platform in
@@ -52,13 +60,15 @@ struct Publish: AsyncParsableCommand {
                 return pl
             }
             guard let vis = Visibility(rawValue: visibility) else { throw ValidationErrorText("Visibility must be private, unlisted or public") }
+            guard ExportPreset.named(preset) != nil else {
+                throw ValidationErrorText("Unknown preset. Try: \(ExportPreset.builtIn.map(\.id).joined(separator: ", "))")
+            }
             let post = ScheduledPost(projectID: p.id, timelineIndex: timeline, platforms: platforms,
                                      title: title ?? p.timelines[timeline].name, description: description,
                                      tags: tags.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty },
                                      visibility: vis, scheduledAt: try Publish.parseDate(at), presetID: preset)
-            try Publish.queue(s).add(post)
-            let df = DateFormatter(); df.dateStyle = .medium; df.timeStyle = .short
-            Console.line("Scheduled “\(post.title)” for \(df.string(from: post.scheduledAt)) → \(platforms.map(\.displayName).joined(separator: ", ")) (\(post.id.uuidString.prefix(8)))")
+            if let problem = post.problems.first { throw ValidationErrorText(problem) }
+            return post
         }
     }
 
@@ -217,43 +227,39 @@ struct Publish: AsyncParsableCommand {
 
     // MARK: - Publishing
 
-    /// Exports (if needed) and uploads one post to each remaining platform, updating the queue as it goes.
-    static func execute(_ post: ScheduledPost, services s: Services, queue: PublishQueue) async throws {
-        let project = try s.library.loadProject(post.projectID)
-        guard project.timelines.indices.contains(post.timelineIndex) else { throw ValidationErrorText("Timeline \(post.timelineIndex) not found") }
-        let timeline = project.timelines[post.timelineIndex]
-        var file = post.exportedFile
-        if file == nil || !FileManager.default.fileExists(atPath: file!.path) {
-            try queue.update(post.id) { $0.status = .exporting }
-            let dir = queue.url.deletingLastPathComponent().appendingPathComponent("Exports", isDirectory: true)
-            let out = dir.appendingPathComponent(post.id.uuidString.prefix(8) + " " + timeline.name.replacingOccurrences(of: "/", with: "-"))
-                .appendingPathExtension("mp4")
-            file = try await s.export(timeline, project: project.name, preset: post.presetID, to: out.path)
-            try queue.update(post.id) { $0.exportedFile = file }
-        }
-        let captions = ((try? FileManager.default.contentsOfDirectory(at: file!.deletingLastPathComponent(), includingPropertiesForKeys: nil)) ?? [])
-            .filter { $0.pathExtension == "srt" && $0.lastPathComponent.hasPrefix(file!.deletingPathExtension().lastPathComponent) }
-        try queue.update(post.id) { $0.status = .uploading }
+    /// Exports through `Services` (sidecars always written: YouTube uploads them as captions) and reports progress on
+    /// the terminal.
+    static func runner(_ s: Services, queue: PublishQueue) -> PublishRunner {
         let store = Publish.store()
-        for platform in post.remainingPlatforms {
-            let visibility: Visibility = platform == .instagram ? .public : post.visibility   // Reels have no private mode
-            let request = PublishRequest(file: file!, title: post.title, description: post.description, tags: post.tags,
-                                         visibility: visibility, captions: captions, attributions: timeline.attributions)
-            do {
-                let publisher = try PublisherFactory.publisher(for: platform, store: store)
-                let result = try await publisher.publish(request) { p in Console.progress(p.fraction, "\(platform.displayName): \(p.message)") }
-                Console.clearStatus()
+        return PublishRunner(queue: queue, loadTimeline: { post in
+            let project = try s.library.loadProject(post.projectID)
+            guard project.timelines.indices.contains(post.timelineIndex) else { throw ValidationErrorText("Timeline \(post.timelineIndex) not found") }
+            return project.timelines[post.timelineIndex]
+        }, export: { timeline, preset, url in
+            try await s.export(timeline, project: timeline.name, preset: preset.id, to: url.path, honorSidecarSetting: false)
+        }, publisher: { platform in
+            try PublisherFactory.publisher(for: platform, store: store)
+        }, events: { event in
+            switch event {
+            case .exporting, .uploading: break
+            case .published(let platform, let result):
                 Console.line("  ✓ \(platform.displayName): \(result.url?.absoluteString ?? result.remoteID) — \(result.status)")
-                try queue.update(post.id) { $0.results.append(result); $0.errors[platform.rawValue] = nil }
-            } catch {
-                Console.clearStatus()
-                Console.line("  ⚠️ \(platform.displayName): \(error)")
-                try queue.update(post.id) { $0.errors[platform.rawValue] = "\(error)" }
+            case .failed(let platform, let message): Console.line("  ⚠️ \(platform.displayName): \(message)")
             }
-        }
-        try queue.update(post.id) { p in
-            p.status = p.remainingPlatforms.isEmpty ? .posted : (p.results.isEmpty ? .failed : .partial)
-        }
+        }, progress: { platform, p in
+            Console.progress(p.fraction, "\(platform.displayName): \(p.message)")
+        })
+    }
+
+    /// Prints what a finished run left in the queue (export failures and interruptions; per-platform lines are printed live).
+    static func report(_ post: ScheduledPost) {
+        for key in ["export", "interrupted"] { if let error = post.errors[key] { Console.line("  ⚠️ \(error)") } }
+        Console.line("  → \(post.status.rawValue)")
+    }
+
+    static func writeCalendar(_ q: PublishQueue) throws {
+        try PublishCalendar.ics(try q.posts()).write(to: q.url.deletingLastPathComponent().appendingPathComponent("clipper.ics"),
+                                                     atomically: true, encoding: .utf8)
     }
 
     struct Now: AsyncParsableCommand {
@@ -266,18 +272,20 @@ struct Publish: AsyncParsableCommand {
         @Option var title: String?
         @Option var description = ""
         @Option var tags = ""
-        @Option(help: "private, unlisted or public (Instagram Reels are always public).") var visibility = "private"
+        @Option(help: "private, unlisted or public (Instagram Reels are always public, so Instagram needs public).") var visibility = "private"
         @Option var preset = "shorts-1080x1920"
 
         func run() async throws {
             var schedule = try Schedule.parse([project, "--timeline", String(timeline), "--to", to, "--at", "now", "--description", description,
                                                "--tags", tags, "--visibility", visibility, "--preset", preset] + (title.map { ["--title", $0] } ?? []))
             schedule.lib = lib
-            try await schedule.run()
             let s = try Services(lib)
             let q = Publish.queue(s)
-            guard let post = try q.posts().filter({ $0.status == .scheduled }).max(by: { $0.updated < $1.updated }) else { return }
-            try await Publish.execute(post, services: s, queue: q)
+            // Run exactly the post created here (never pick one out of the queue).
+            let post = try schedule.makePost(s)
+            try q.add(post)
+            Console.line("Publishing “\(post.title)” → \(post.platforms.map(\.displayName).joined(separator: ", ")) (\(post.id.uuidString.prefix(8)))")
+            if let done = try await Publish.runner(s, queue: q).run(post.id) { Publish.report(done) }
         }
     }
 
@@ -287,16 +295,22 @@ struct Publish: AsyncParsableCommand {
         func run() async throws {
             let s = try Services(lib)
             let q = Publish.queue(s)
+            for post in try q.recoverInterrupted() {
+                Console.line("Requeued “\(post.title)”: its last run was interrupted")
+            }
             let due = try q.due()
             if due.isEmpty { Console.line("Nothing due."); return }
+            let runner = Publish.runner(s, queue: q)
             for post in due {
                 Console.line("Publishing “\(post.title)” → \(post.remainingPlatforms.map(\.displayName).joined(separator: ", "))")
-                do { try await Publish.execute(post, services: s, queue: q) } catch {
-                    Console.line("  ⚠️ \(error)")
-                    try q.update(post.id) { $0.status = .failed; $0.errors["export"] = "\(error)" }
+                // Claimed atomically: skipped if the app (or another run-due) started it meanwhile.
+                guard let done = try await runner.run(post.id, from: [.scheduled, .partial]) else {
+                    Console.line("  Skipped: already being published elsewhere or no longer due.")
+                    continue
                 }
+                Publish.report(done)
             }
-            try PublishCalendar.ics(try q.posts()).write(to: q.url.deletingLastPathComponent().appendingPathComponent("clipper.ics"), atomically: true, encoding: .utf8)
+            try Publish.writeCalendar(q)
         }
     }
 
@@ -308,17 +322,18 @@ struct Publish: AsyncParsableCommand {
         func run() async throws {
             let label = "dev.yashjain.clipper.publish"
             let plist = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/LaunchAgents/\(label).plist")
-            let launchctl = { (args: [String]) in
-                let p = Process(); p.executableURL = URL(fileURLWithPath: "/bin/launchctl"); p.arguments = args
-                try? p.run(); p.waitUntilExit()
-            }
+            let domain = "gui/\(getuid())"
             if uninstall {
-                launchctl(["bootout", "gui/\(getuid())", plist.path])
+                _ = try? Publish.launchctl(["bootout", domain, plist.path])   // fails harmlessly when not loaded
                 try? FileManager.default.removeItem(at: plist)
                 Console.line("Removed \(plist.path)")
                 return
             }
-            let exe = URL(fileURLWithPath: CommandLine.arguments[0]).standardizedFileURL.resolvingSymlinksInPath().path
+            // The running binary itself (argv[0] may be a bare name found via PATH, relative to another directory).
+            guard let exe = Bundle.main.executableURL?.resolvingSymlinksInPath().path,
+                  FileManager.default.isExecutableFile(atPath: exe) else {
+                throw ValidationErrorText("Couldn't determine the path of the clipper executable")
+            }
             let logs = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/Clipper", isDirectory: true)
             try FileManager.default.createDirectory(at: logs, withIntermediateDirectories: true)
             let dict: [String: Any] = [
@@ -330,9 +345,28 @@ struct Publish: AsyncParsableCommand {
             ]
             try FileManager.default.createDirectory(at: plist.deletingLastPathComponent(), withIntermediateDirectories: true)
             try PropertyListSerialization.data(fromPropertyList: dict, format: .xml, options: 0).write(to: plist)
-            launchctl(["bootout", "gui/\(getuid())", plist.path])
-            launchctl(["bootstrap", "gui/\(getuid())", plist.path])
+            _ = try? Publish.launchctl(["bootout", domain, plist.path])   // replace a previously loaded copy, if any
+            let (status, output) = try Publish.launchctl(["bootstrap", domain, plist.path])
+            guard status == 0 else {
+                throw ValidationErrorText("launchctl bootstrap failed (\(status)): \(output.trimmingCharacters(in: .whitespacesAndNewlines)). The plist is at \(plist.path).")
+            }
             Console.line("Installed \(plist.path) (every 15 min; log: \(logs.path)/publish.log). Remove with --uninstall.")
+            Console.line("Runs \(exe); run install-agent again if you move it. After a rebuild (ad-hoc signed) macOS may ask once more to"
+                         + " allow Keychain access the first time the agent publishes; choose \"Always Allow\".")
         }
+    }
+
+    /// Runs launchctl and returns its exit status and combined output.
+    static func launchctl(_ args: [String]) throws -> (Int32, String) {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+        p.arguments = args
+        let pipe = Pipe()
+        p.standardOutput = pipe
+        p.standardError = pipe
+        try p.run()
+        let output = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        p.waitUntilExit()
+        return (p.terminationStatus, output)
     }
 }

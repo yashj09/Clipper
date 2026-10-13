@@ -24,9 +24,14 @@ public protocol AudioStage: Sendable {
     mutating func process(_ samples: inout [Float], channels: Int)
     /// Delay the stage introduces (frames); output timestamps are shifted back by this to keep A/V sync.
     var latencyFrames: Int { get }
+    /// At the end of the stream: the `latencyFrames` still held back (interleaved), so the end isn't cut off.
+    mutating func flush(channels: Int) -> [Float]
 }
 
-extension AudioStage { public var latencyFrames: Int { 0 } }
+extension AudioStage {
+    public var latencyFrames: Int { 0 }
+    public mutating func flush(channels: Int) -> [Float] { [] }
+}
 
 /// Loudness normalization: constant gain to reach the target, then a true-peak limiter to hold the ceiling.
 public struct LoudnessStage: AudioStage {
@@ -41,6 +46,7 @@ public struct LoudnessStage: AudioStage {
         limiter.process(&samples)
     }
     public var latencyFrames: Int { limiter.latencyFrames }
+    public mutating func flush(channels: Int) -> [Float] { limiter.flush() }
 }
 
 /// Renders a timeline to a file through the same compositor as preview:
@@ -92,12 +98,47 @@ public enum Exporter {
         CGSize(width: preset.width ?? timeline.canvas.width, height: preset.height ?? timeline.canvas.height)
     }
 
+    /// Where an export is written until it succeeds: a sibling of `url`, so an existing file at `url` (the last good
+    /// export) is only replaced by a complete one.
+    static func partialURL(for url: URL) -> URL {
+        url.deletingPathExtension().appendingPathExtension("partial").appendingPathExtension(url.pathExtension)
+    }
+
     private static func render(_ timeline: Timeline, assets: [AssetID: MediaAsset], preset: ExportPreset, to url: URL,
                                audioStage: (any AudioStage)?, appliedGain: Double?,
                                progress: (@Sendable (ExportProgress) -> Void)?) async throws -> ExportResult {
         let start = ContinuousClock.now
-        try? FileManager.default.removeItem(at: url)
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let partial = partialURL(for: url)
+        try? FileManager.default.removeItem(at: partial)
+        let frames: Int
+        do {
+            frames = try await encode(timeline, assets: assets, preset: preset, to: partial, audioStage: audioStage,
+                                      start: start, progress: progress)
+            try install(partial, at: url)
+        } catch {
+            try? FileManager.default.removeItem(at: partial)
+            removeSafeSaveLeftovers(of: partial)
+            throw error
+        }
+        let sidecars = try writeSidecars(timeline, formats: preset.sidecars, besides: url)
+        progress?(ExportProgress(fraction: 1, framesWritten: frames, framesPerSecond: Double(frames) / (ContinuousClock.now - start).seconds))
+        return ExportResult(url: url, sidecars: sidecars, frames: frames, seconds: (ContinuousClock.now - start).seconds, appliedGain: appliedGain)
+    }
+
+    /// Moves the finished file into place, replacing any previous export.
+    static func install(_ file: URL, at url: URL) throws {
+        if FileManager.default.fileExists(atPath: url.path) {
+            _ = try FileManager.default.replaceItemAt(url, withItemAt: file)
+        } else {
+            try FileManager.default.moveItem(at: file, to: url)
+        }
+    }
+
+    /// Encodes the timeline to `url`; returns the number of video frames written.
+    private static func encode(_ timeline: Timeline, assets: [AssetID: MediaAsset], preset: ExportPreset, to url: URL,
+                               audioStage: (any AudioStage)?, start: ContinuousClock.Instant,
+                               progress: (@Sendable (ExportProgress) -> Void)?) async throws -> Int {
         let size = outputSize(timeline, preset)
         let built = try await CompositionBuilder.build(timeline, assets: assets,
                                                        options: BuildOptions(transparent: preset.transparentBackground, outputSize: size))
@@ -161,7 +202,8 @@ public enum Exporter {
                 }
                 if let aIn = io.value.2, let aOut = io.value.3 {
                     group.addTask {
-                        await pump(aIn, from: aOut, label: "audio") { sb in stage.value.apply(sb) }
+                        await pump(aIn, from: aOut, label: "audio", transform: { sb in stage.value.apply(sb) },
+                                   finish: { stage.value.tail() })
                     }
                 }
             }
@@ -174,10 +216,7 @@ public enum Exporter {
         await writer.finishWriting()
         if writer.status != .completed { throw writer.error ?? CocoaError(.fileWriteUnknown) }
         removeSafeSaveLeftovers(of: url)
-
-        let sidecars = try writeSidecars(timeline, formats: preset.sidecars, besides: url)
-        progress?(ExportProgress(fraction: 1, framesWritten: counter.value, framesPerSecond: Double(counter.value) / (ContinuousClock.now - start).seconds))
-        return ExportResult(url: url, sidecars: sidecars, frames: counter.value, seconds: (ContinuousClock.now - start).seconds, appliedGain: appliedGain)
+        return counter.value
     }
 
     /// Writes subtitle sidecars next to `url`: `<name>.<ext>` for the visible caption tracks and
@@ -241,15 +280,17 @@ public enum Exporter {
         return s
     }
 
-    /// Drains `output` into `input`, transforming each sample buffer.
+    /// Drains `output` into `input`, transforming each sample buffer; `finish` may supply one last buffer at the end.
     static func pump(_ input: AVAssetWriterInput, from output: AVAssetReaderOutput, label: String,
-                     transform: @escaping @Sendable (CMSampleBuffer) -> CMSampleBuffer?) async {
+                     transform: @escaping @Sendable (CMSampleBuffer) -> CMSampleBuffer?,
+                     finish: (@Sendable () -> CMSampleBuffer?)? = nil) async {
         let i = UncheckedSendable(input), o = UncheckedSendable(output)
         await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
             let queue = DispatchQueue(label: "clipper.export.\(label)", qos: .userInitiated)
             i.value.requestMediaDataWhenReady(on: queue) {
                 while i.value.isReadyForMoreMediaData {
                     guard let sb = o.value.copyNextSampleBuffer() else {
+                        if let last = finish?() { _ = i.value.append(last) }
                         i.value.markAsFinished()
                         cont.resume()
                         return
@@ -275,14 +316,33 @@ final class FrameCounter: @unchecked Sendable {
 /// Holds the (mutable, stateful) audio stage; only touched from the audio pump's serial queue.
 final class StageBox: @unchecked Sendable {
     var stage: (any AudioStage)?
+    /// End of the last input buffer and its format, to place the stage's tail right after it.
+    private var end: CMTime?
+    private var format: CMFormatDescription?
+
     init(_ stage: (any AudioStage)?) { self.stage = stage }
+
+    private var shift: CMTime {
+        CMTime(value: CMTimeValue(stage?.latencyFrames ?? 0), timescale: CMTimeScale(Exporter.audioSampleRate))
+    }
 
     func apply(_ sb: CMSampleBuffer) -> CMSampleBuffer? {
         guard stage != nil else { return sb }
-        let shift = CMTime(value: CMTimeValue(stage!.latencyFrames), timescale: CMTimeScale(Exporter.audioSampleRate))
+        let frames = CMSampleBufferGetNumSamples(sb)
+        end = CMSampleBufferGetPresentationTimeStamp(sb) + CMTime(value: CMTimeValue(frames), timescale: CMTimeScale(Exporter.audioSampleRate))
+        format = CMSampleBufferGetFormatDescription(sb)
         return AudioSampleBuffers.map(sb, channels: Exporter.audioChannels, shiftBack: shift) { samples in
             stage!.process(&samples, channels: Exporter.audioChannels)
         }
+    }
+
+    /// The audio the stage still holds back at the end of the stream (its latency), stamped right after the last
+    /// buffer it output — without it every limited export loses its last `latencyFrames`.
+    func tail() -> CMSampleBuffer? {
+        guard stage != nil, let end, let format else { return nil }
+        let samples = stage!.flush(channels: Exporter.audioChannels)
+        guard !samples.isEmpty else { return nil }
+        return AudioSampleBuffers.make(samples, channels: Exporter.audioChannels, format: format, at: end - shift)
     }
 }
 
@@ -301,6 +361,12 @@ public enum AudioSampleBuffers {
         var samples = floats(sb)
         body(&samples)
         guard let format = CMSampleBufferGetFormatDescription(sb) else { return nil }
+        return make(samples, channels: channels, format: format, at: CMSampleBufferGetPresentationTimeStamp(sb) - shiftBack)
+    }
+
+    /// A sample buffer holding interleaved Float32 `samples` in `format`, starting at `time`.
+    public static func make(_ samples: [Float], channels: Int, format: CMFormatDescription, at time: CMTime) -> CMSampleBuffer? {
+        guard channels > 0, !samples.isEmpty else { return nil }
         let bytes = samples.count * MemoryLayout<Float>.size
         var block: CMBlockBuffer?
         guard CMBlockBufferCreateWithMemoryBlock(allocator: nil, memoryBlock: nil, blockLength: bytes, blockAllocator: nil,
@@ -308,9 +374,8 @@ public enum AudioSampleBuffers {
                                                  blockBufferOut: &block) == noErr, let block else { return nil }
         samples.withUnsafeBytes { _ = CMBlockBufferReplaceDataBytes(with: $0.baseAddress!, blockBuffer: block, offsetIntoDestination: 0, dataLength: bytes) }
         var out: CMSampleBuffer?
-        let frames = CMSampleBufferGetNumSamples(sb)
         guard CMAudioSampleBufferCreateReadyWithPacketDescriptions(allocator: nil, dataBuffer: block, formatDescription: format,
-                                                                   sampleCount: frames, presentationTimeStamp: CMSampleBufferGetPresentationTimeStamp(sb) - shiftBack,
+                                                                   sampleCount: samples.count / channels, presentationTimeStamp: time,
                                                                    packetDescriptions: nil, sampleBufferOut: &out) == noErr else { return nil }
         return out
     }

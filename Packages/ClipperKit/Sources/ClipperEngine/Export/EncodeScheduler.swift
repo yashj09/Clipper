@@ -2,8 +2,8 @@ import Foundation
 
 /// Serializes hardware video encoding. Phase 0 (S1) measured a foreground HEVC export dropping from ~210 fps to
 /// 6 fps while another HEVC session ran on the M4 Pro's single media encoder, so exports, proxies and transcodes
-/// all take turns here; foreground (user-visible) work jumps the queue and background work can poll
-/// `shouldYield` to pause between chunks.
+/// all take turns here. Foreground (user-visible) work jumps ahead of queued background work; a background encode
+/// that is already running (an FFmpeg transcode is one process) finishes before the export starts.
 public actor EncodeScheduler {
     public static let shared = EncodeScheduler()
     public enum Priority: Sendable { case foreground, background }
@@ -12,8 +12,6 @@ public actor EncodeScheduler {
     private var waiting: [(Priority, CheckedContinuation<Void, Never>)] = []
 
     public init() {}
-
-    public var shouldYield: Bool { waiting.contains { $0.0 == .foreground } }
 
     public func run<T: Sendable>(_ priority: Priority, _ body: @Sendable () async throws -> T) async throws -> T {
         await acquire(priority)

@@ -10,7 +10,7 @@ A local-first, automatic video editor for macOS. Built for short-form content, w
 
 ## Status
 
-**Phases 0–3 built** (spikes, clips → short, long recording → many shorts, templates/translation/generated music). See [`docs/ROADMAP.md`](docs/ROADMAP.md).
+**Phases 0–4 built** (spikes, clips → short, long recording → many shorts, templates/translation/generated music, publishing/scheduling and FCPXML/OTIO export). See [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 ## Build
 

@@ -71,6 +71,41 @@ public enum Subtitles {
         return out
     }
 
+    /// A sidecar with distinct caption content and the language of its captions (nil = unknown).
+    public struct SidecarLanguage: Equatable, Sendable {
+        public var suffix: String
+        public var language: String?
+    }
+
+    /// The `format` sidecars `sidecars(_:formats:)` names for this timeline that each carry distinct captions, with
+    /// their language: every `<language>.<ext>` file, plus the plain `<ext>` file unless each of its (visible) tracks
+    /// is already covered by a tagged file. The plain file is labelled with the visible tracks' language when they
+    /// share one. Lets an uploader send each language once and label it correctly — e.g. Spanish-only captions are
+    /// written only as `<name>.srt`, which must not be taken for English.
+    public static func distinctSidecars(_ timeline: Timeline, format: SidecarFormat) -> [SidecarLanguage] {
+        let visible = visibleTracks(timeline)
+        let allLanguages = languages(timeline)
+        var tagged: [SidecarLanguage] = []
+        var taggedLanguages = Set<String>()
+        var used = Set<String>()
+        for language in allLanguages {
+            let tag = fileTag(language)
+            guard used.insert(tag.lowercased()).inserted else { continue }
+            let tracks = tracks(timeline, language: language)
+            // Mirrors `sidecars`: a single language identical to the visible tracks is only written as the plain file.
+            if Set(tracks.map(\.id)) == Set(visible.map(\.id)) && allLanguages.count == 1 { continue }
+            tagged.append(SidecarLanguage(suffix: "\(tag).\(format.fileExtension)", language: language))
+            taggedLanguages.insert(language)
+        }
+        var out: [SidecarLanguage] = []
+        let covered = !visible.isEmpty && visible.allSatisfy { $0.language.map(taggedLanguages.contains) ?? false }
+        if !visible.isEmpty, !covered {
+            let visibleLanguages = Set(visible.map(\.language))
+            out.append(SidecarLanguage(suffix: format.fileExtension, language: visibleLanguages.count == 1 ? visibleLanguages.first! : nil))
+        }
+        return out + tagged
+    }
+
     // MARK: - Internals
 
     static func visibleTracks(_ timeline: Timeline) -> [Track] {

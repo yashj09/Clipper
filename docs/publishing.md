@@ -35,7 +35,7 @@ In the app: **Settings â–¸ Accounts** (keys, Connect, setup guides), **Publishâ€
 Notes:
 - Google's current `videos.insert` docs say videos from unverified API projects are **no longer restricted to private**. If yours stay private, request the API compliance audit.
 - While the consent screen is in "Testing", refresh tokens expire after **7 days**, so reconnect weekly or publish the consent screen.
-- Captions are uploaded from the exported `.srt` files. The language comes from `<name>.<lang>.srt`.
+- Captions are uploaded from the exported `.srt` files, one per language: `<name>.<lang>.srt` for each tagged caption track, and the plain `<name>.srt` (labelled with the visible captions' language) only when no tagged file already carries it.
 
 ## TikTok
 

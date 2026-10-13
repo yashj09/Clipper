@@ -49,7 +49,7 @@ struct Highlights: AsyncParsableCommand {
             case "ollama": .ollama
             case "lmstudio", "lm-studio": .lmStudio
             case "mlx": .mlxServer
-            default: LLMEndpoint(baseURL: URL(string: llm)!, model: model ?? "default")
+            default: LLMEndpoint(baseURL: try Self.serverURL(llm), model: model ?? "default")
             }
             if let model { endpoint.model = model }
             let ranker = LocalLLMRanker(endpoint: endpoint)
@@ -94,6 +94,14 @@ struct Highlights: AsyncParsableCommand {
                 try await s.export(tl, project: project.name, preset: preset ?? template.exportPreset, to: nil)
             }
         }
+    }
+
+    /// A `--llm` base URL: absolute http(s) with a host, e.g. http://localhost:8080/v1.
+    static func serverURL(_ text: String) throws -> URL {
+        guard let url = URL(string: text), ["http", "https"].contains(url.scheme?.lowercased() ?? ""), url.host?.isEmpty == false else {
+            throw ValidationErrorText("--llm must be ollama, lmstudio, mlx or a server URL like http://localhost:8080/v1 (got “\(text)”)")
+        }
+        return url
     }
 }
 

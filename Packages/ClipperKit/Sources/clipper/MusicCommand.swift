@@ -74,10 +74,11 @@ struct MusicCommand: AsyncParsableCommand {
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             var tracks: [MusicTrack] = []
             for (i, p) in pieces.enumerated() {
-                let file = dir.appendingPathComponent(p.filename)
+                guard let name = p.localFileName, let source = p.downloadURL else { Console.line("  ⚠️ \(p.title): unusable file name in the catalog"); continue }
+                let file = dir.appendingPathComponent(name)
                 if !FileManager.default.fileExists(atPath: file.path) {
                     Console.status("Downloading [\(i + 1)/\(pieces.count)] \(p.title)")
-                    let (tmp, response) = try await URLSession.shared.download(from: p.downloadURL)
+                    let (tmp, response) = try await URLSession.shared.download(from: source)
                     guard (response as? HTTPURLResponse)?.statusCode == 200 else { Console.line("  ⚠️ \(p.title): download failed"); continue }
                     try FileManager.default.moveItem(at: tmp, to: file)
                 }

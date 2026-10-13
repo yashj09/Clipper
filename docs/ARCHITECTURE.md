@@ -63,7 +63,7 @@ enum Rule       { maxDuration, silenceCut, cutOnBeats, punchIn, reframe, duck, c
    - Format: HEVC 720p, a keyframe every 0.5 s, no B-frames.
    - Generation is limited by **decoding** (about 400 fps for 1080p HEVC).
 8. **One decode per source at ingest.** A single decode pass feeds thumbnails, waveform peaks, scene and face detection, and the proxy writer. Each analyzer doesn't re-decode.
-9. **One hardware-encode scheduler.** All VideoToolbox encodes (exports, proxies, mezzanines) go through one queue, and background jobs yield to exports. Two concurrent HEVC sessions on the M4 Pro slow the foreground job by about 35×.
+9. **One hardware-encode scheduler.** All VideoToolbox encodes (exports, proxies, mezzanines) go through one queue, and exports jump ahead of queued background jobs (a background encode already running finishes first; it does not pause mid-way). Two concurrent HEVC sessions on the M4 Pro slow the foreground job by about 35×.
 10. **Import fallback**: if AVFoundation can't play a file, FFmpeg transcodes it once to a 10-bit HEVC mezzanine file.
 
 ## Automation (first milestone)

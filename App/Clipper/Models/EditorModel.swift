@@ -8,6 +8,7 @@ import Observation
 
 /// One open project: the timeline being edited, selection, playhead, undo history and the preview player.
 /// Every change goes through `perform(_:)`, so it is validated, undoable and re-rendered the same way.
+/// Undo/redo is `EditHistory` alone; the Edit menu (ClipperApp) drives it directly.
 @MainActor @Observable
 final class EditorModel {
     private(set) var project: Project
@@ -22,8 +23,9 @@ final class EditorModel {
     let player = PlayerController()
 
     @ObservationIgnored var onChange: ((Project) -> Void)?
-    @ObservationIgnored weak var undoManager: UndoManager?
     @ObservationIgnored private var saveTask: Task<Void, Never>?
+    /// The latest edited project not yet handed to `onChange` (saves are debounced).
+    @ObservationIgnored private var pendingSave: Project?
 
     var settings: ClipperSettings
 
@@ -63,7 +65,6 @@ final class EditorModel {
         }
         timeline = tl
         selection = selection.filter { tl.item($0) != nil }
-        registerUndo(name: command.name)
         changed()
     }
 
@@ -86,25 +87,32 @@ final class EditorModel {
         changed()
     }
 
-    /// Bridges our snapshot history to the window's undo manager so Edit ▸ Undo shows the right names.
-    private func registerUndo(name: String) {
-        guard let um = undoManager else { return }
-        um.registerUndo(withTarget: self) { target in
-            target.undo()
-            um.registerUndo(withTarget: target) { $0.redo() }
-        }
-        um.setActionName(name)
-    }
-
     private func changed() {
         rebuildPreview()
         saveTask?.cancel()
-        let snapshot = project
+        pendingSave = project
         saveTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(1))
             guard !Task.isCancelled else { return }
-            self?.onChange?(snapshot)
+            self?.flushSave()
         }
+    }
+
+    /// Saves a pending (debounced) change right away. Call before the editor is replaced or closed and when the app
+    /// quits; otherwise the last second of edits would be lost with the editor.
+    func flushSave() {
+        saveTask?.cancel()
+        saveTask = nil
+        guard let snapshot = pendingSave else { return }
+        pendingSave = nil
+        onChange?(snapshot)
+    }
+
+    /// Drops a pending save (the project is being deleted).
+    func discardPendingSave() {
+        saveTask?.cancel()
+        saveTask = nil
+        pendingSave = nil
     }
 
     /// Switches between the shorts of a multi-timeline project (e.g. VOD highlights). Undo history is per timeline session.
@@ -197,6 +205,11 @@ final class PlayerController {
     @ObservationIgnored private var buildTask: Task<Void, Never>?
     @ObservationIgnored private var timeObserver: Any?
     @ObservationIgnored private var generation = 0
+
+    isolated deinit {
+        // AVPlayer keeps a periodic observer (and its block) until whoever added it removes it.
+        if let timeObserver { player.removeTimeObserver(timeObserver) }
+    }
 
     init() {
         player.actionAtItemEnd = .pause

@@ -226,3 +226,37 @@ func talkingInput(seed: UInt64 = 7, title: String? = "Local editing in 60s") -> 
         print(pack.map { "\($0.title) [\($0.moods.joined(separator: ","))] \($0.bpm ?? "?") BPM" }.joined(separator: "\n"))
     }
 }
+
+@Suite struct CaptionPagingTests {
+    @Test func pagesStartingInTheSameFrameAreBothKept() {
+        // "Hi." ends a sentence (new page) and the next word starts 10 ms later: both pages floor to frame 30.
+        let words = [TimedWord(text: "Hi.", start: 1.0, end: 1.005, isFiller: false),
+                     TimedWord(text: "there", start: 1.01, end: 1.4, isFiller: false),
+                     TimedWord(text: "friend", start: 1.4, end: 1.8, isFiller: false)]
+        var ids = IDGenerator(seed: 1)
+        let items = Captions.items(words: words, styleName: "c", style: TextStyle(wordsPerPage: 3), rate: .fps30, ids: &ids)
+        let texts = items.flatMap { item -> [String] in if case .caption(let c) = item.content { c.words.map(\.text) } else { [] } }
+        #expect(texts == ["Hi.", "there", "friend"])   // no words lost
+        #expect(items.count == 2)
+        #expect(items.allSatisfy { !$0.range.isEmpty })
+        #expect(zip(items, items.dropFirst()).allSatisfy { $0.end <= $1.start })
+    }
+}
+
+@Suite struct MusicCatalogSafetyTests {
+    func piece(_ filename: String) -> IncompetechCatalog.Piece {
+        IncompetechCatalog.Piece(title: filename, filename: filename, length: "2:00", bpm: "100", feel: "Relaxed", instruments: nil)
+    }
+
+    @Test func remoteFileNamesCannotEscapeTheMusicFolder() {
+        for unsafe in ["../../Library/LaunchAgents/x.plist", "a/b.mp3", "..", ".hidden.mp3", "", "x\u{0}.mp3", "C:\\x.mp3"] {
+            #expect(piece(unsafe).localFileName == nil, "\(unsafe)")
+            #expect(piece(unsafe).downloadURL == nil, "\(unsafe)")
+        }
+        let ok = piece("Carefree & Easy's.mp3")
+        #expect(ok.localFileName == "Carefree & Easy's.mp3")
+        #expect(ok.downloadURL?.absoluteString == "https://incompetech.com/music/royalty-free/mp3-royaltyfree/Carefree%20%26%20Easy%27s.mp3")
+        // Unsafe entries never make it into the starter pack.
+        #expect(IncompetechCatalog.starterPack([piece("../evil.mp3"), piece("Fine.mp3")], moods: ["chill"]).map(\.filename) == ["Fine.mp3"])
+    }
+}

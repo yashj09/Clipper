@@ -88,3 +88,19 @@ import Testing
         #expect(errors.first?.contains("slots[0]") == true, "\(errors)")
     }
 }
+
+@Suite struct TemplateBuilderMixedSlotTests {
+    @Test func manualClipWithoutSlotFirstOnTheTrackKeepsTheSlot() throws {
+        // The user put a manual clip (no slot) first on the primary track, before the draft's clips.
+        var tl = DraftPipeline.run(talkingInput()).timeline
+        let index = try #require(tl.tracks.firstIndex { t in t.items.contains { $0.slot == "speaker" } })
+        let manualAsset = videoAsset("manual", seconds: 5)
+        let manual = Item(range: TimeRange(seconds: tl.duration.seconds, tl.duration.seconds + 2),
+                          content: .media(MediaRef(asset: manualAsset.id, source: TimeRange(seconds: 0, 2))))
+        tl.tracks[index].items.insert(manual, at: 0)
+        #expect(tl.tracks[index].items[0].slot == nil)
+
+        let t = TemplateBuilder.make(from: tl, id: "mixed", name: "Mixed", basedOn: BuiltIns.talkingHead).template
+        #expect(t.slots.contains { $0.id == "speaker" && $0.role == .primary })
+    }
+}

@@ -53,6 +53,8 @@ final class AppModel {
     var templateEdit: TemplateEditRequest?
 
     @ObservationIgnored private let watcher = FolderWatcher()
+    /// Watch-folder settings the watcher was last started with.
+    @ObservationIgnored private var watching: ClipperSettings.Integrations?
 
     init() {
         do {
@@ -61,6 +63,7 @@ final class AppModel {
             settings = (try? lib.settings()) ?? ClipperSettings()
             refresh()
             restartWatching()
+            recoverInterruptedPosts()
         } catch {
             libraryError = "Couldn't open the library at \(Library.defaultURL.path): \(error)"
         }
@@ -109,6 +112,8 @@ final class AppModel {
 
     func open(_ id: UUID) {
         guard let library else { return }
+        // Write the current editor's last edits before it is replaced (and before reloading, if it's this project).
+        editor?.flushSave()
         do {
             let project = try library.loadProject(id)
             let editor = EditorModel(project: project, assets: allAssets, settings: settings)
@@ -123,10 +128,19 @@ final class AppModel {
     }
 
     func delete(_ id: UUID) {
+        if editor?.project.id == id {
+            editor?.discardPendingSave()   // a late save would bring the deleted project back
+            if case .project(id) = section { section = .media }
+            editor = nil
+        } else {
+            editor?.flushSave()
+        }
         try? library?.deleteProject(id)
-        if case .project(id) = section { section = .media; editor = nil }
         refresh()
     }
+
+    /// Saves pending edits before the app quits.
+    func prepareForTermination() { editor?.flushSave() }
 
     // MARK: Draft
 
@@ -251,7 +265,7 @@ final class AppModel {
         let assets = editor.assets
         activity = Activity(title: "Exporting", detail: preset.name, progress: 0)
         do {
-            let result = try await Exporter.export(timeline, assets: assets, preset: preset, to: url) { p in
+            let result = try await Exporter.export(timeline, assets: assets, preset: preset.applying(settings.export), to: url) { p in
                 Task { @MainActor in self.activity?.progress = p.fraction; self.activity?.detail = String(format: "%@ — %.0f fps", preset.name, p.framesPerSecond) }
             }
             activity = nil
@@ -275,9 +289,12 @@ final class AppModel {
             var tracks: [MusicTrack] = []
             for (i, p) in pieces.enumerated() {
                 activity = Activity(title: "Music", detail: "\(i + 1)/\(pieces.count) \(p.title)", progress: Double(i) / Double(pieces.count))
-                let file = dir.appendingPathComponent(p.filename)
+                // The catalog is remote data: never let its file name pick a path outside the folder.
+                guard let name = p.localFileName, let source = p.downloadURL else { continue }
+                let file = dir.appendingPathComponent(name)
                 if !FileManager.default.fileExists(atPath: file.path) {
-                    let (tmp, _) = try await URLSession.shared.download(from: p.downloadURL)
+                    let (tmp, response) = try await URLSession.shared.download(from: source)
+                    guard (response as? HTTPURLResponse)?.statusCode == 200 else { continue }
                     try FileManager.default.moveItem(at: tmp, to: file)
                 }
                 let a = try await MusicAnalyzer.analyze(url: file)
@@ -350,15 +367,18 @@ final class AppModel {
         refresh()
     }
 
+    /// Called on every settings change (each keystroke in a text field): the file write is small, but the folder
+    /// watcher is only restarted when the watch settings actually changed.
     func saveSettings() {
         try? library?.saveSettings(settings)
-        editor?.settings = settings
-        restartWatching()
+        if editor?.settings != settings { editor?.settings = settings }
+        if watching != settings.integrations { restartWatching() }
     }
 
     // MARK: Watch folders
 
     func restartWatching() {
+        watching = settings.integrations
         watcher.start(folders: settings.integrations.watchFolders) { [weak self] url in
             guard let self else { return }
             let before = Set(self.assets.map(\.id))

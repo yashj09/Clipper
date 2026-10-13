@@ -19,15 +19,33 @@ public struct PublishRequest: Codable, Sendable, Equatable {
     public var tags: [String]
     public var visibility: Visibility
     /// Caption sidecars to attach where the platform supports it (YouTube).
-    public var captions: [URL]
+    public var captions: [Caption]
     /// Credits that must appear in the description (CC-BY music).
     public var attributions: [String]
     public var isShort: Bool
 
     public init(file: URL, title: String, description: String = "", tags: [String] = [], visibility: Visibility = .private,
-                captions: [URL] = [], attributions: [String] = [], isShort: Bool = true) {
+                captions: [Caption] = [], attributions: [String] = [], isShort: Bool = true) {
         self.file = file; self.title = title; self.description = description; self.tags = tags; self.visibility = visibility
         self.captions = captions; self.attributions = attributions; self.isShort = isShort
+    }
+
+    /// A caption file and the language of its captions (nil = unknown; YouTube then reads it from the file name).
+    public struct Caption: Codable, Sendable, Equatable {
+        public var url: URL
+        public var language: String?
+        public init(url: URL, language: String? = nil) { self.url = url; self.language = language }
+    }
+
+    /// The SRT sidecars the exporter wrote next to `video` for `timeline`: each distinct language once, labelled with
+    /// its language. Matches exact sidecar names (`<name>.srt`, `<name>.<language>.srt`), never other files that merely
+    /// share the prefix (`<name>2.srt`).
+    public static func captionFiles(besides video: URL, timeline: Timeline) -> [Caption] {
+        let dir = video.deletingLastPathComponent(), name = video.deletingPathExtension().lastPathComponent
+        return Subtitles.distinctSidecars(timeline, format: .srt).compactMap { sidecar in
+            let url = dir.appendingPathComponent("\(name).\(sidecar.suffix)")
+            return FileManager.default.fileExists(atPath: url.path) ? Caption(url: url, language: sidecar.language) : nil
+        }
     }
 
     /// Description with required credits appended (never dropped).

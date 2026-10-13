@@ -58,14 +58,14 @@ public struct YouTubePublisher: Publisher {
         var captionNotes: [String] = []
         for (index, caption) in request.captions.enumerated() {
             progress?(UploadProgress(fraction: 0.9 + 0.1 * Double(index) / Double(request.captions.count),
-                                     message: "Uploading captions (\(caption.lastPathComponent))…"))
+                                     message: "Uploading captions (\(caption.url.lastPathComponent))…"))
             do {
-                let language = Self.captionLanguage(for: caption, videoFile: request.file)
-                try await uploadCaption(caption, language: language, videoID: videoID)
+                let language = caption.language ?? Self.captionLanguage(for: caption.url, videoFile: request.file)
+                try await uploadCaption(caption.url, language: language, videoID: videoID)
                 captionNotes.append("captions \(language) added")
             } catch {
                 // The video is already up; report caption failures instead of failing the publish.
-                captionNotes.append("captions \(caption.lastPathComponent) failed: \(error.localizedDescription)")
+                captionNotes.append("captions \(caption.url.lastPathComponent) failed: \(error.localizedDescription)")
             }
         }
         progress?(UploadProgress(fraction: 1, message: "Uploaded to YouTube"))

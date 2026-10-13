@@ -3,7 +3,10 @@ import Foundation
 
 /// A post planned for one or more platforms: which timeline to export, metadata, when, and what happened.
 public struct ScheduledPost: Codable, Sendable, Equatable, Identifiable {
-    public enum Status: String, Codable, Sendable { case scheduled, exporting, uploading, posted, partial, failed, cancelled }
+    public enum Status: String, Codable, Sendable { case scheduled, exporting, uploading, posted, partial, failed, cancelled
+        /// A run owns the post (see `PublishQueue.claim`).
+        public var isRunning: Bool { self == .exporting || self == .uploading }
+    }
 
     public var id: UUID
     public var projectID: UUID
@@ -19,19 +22,34 @@ public struct ScheduledPost: Codable, Sendable, Equatable, Identifiable {
     public var results: [PublishResult]
     public var errors: [String: String]
     public var exportedFile: URL?
+    /// When the queue entry last changed (bookkeeping; never derived from `scheduledAt`).
     public var updated: Date
+    /// Process running the post while it is exporting/uploading, so a run interrupted by a crash or quit can be told
+    /// apart from one still in progress in another process (app vs. LaunchAgent).
+    public var runnerPID: Int32?
 
     public init(id: UUID = UUID(), projectID: UUID, timelineIndex: Int = 0, platforms: [Platform], title: String,
                 description: String = "", tags: [String] = [], visibility: Visibility = .private, scheduledAt: Date,
-                presetID: String = "shorts-1080x1920") {
+                presetID: String = "shorts-1080x1920", created: Date = Date()) {
         self.id = id; self.projectID = projectID; self.timelineIndex = timelineIndex; self.platforms = platforms
         self.title = title; self.description = description; self.tags = tags; self.visibility = visibility
         self.scheduledAt = scheduledAt; self.presetID = presetID; self.status = .scheduled; self.results = []
-        self.errors = [:]; self.exportedFile = nil; self.updated = scheduledAt
+        self.errors = [:]; self.exportedFile = nil; self.updated = created; self.runnerPID = nil
     }
 
     /// Platforms still to do (not yet posted successfully).
     public var remainingPlatforms: [Platform] { platforms.filter { p in !results.contains { $0.platform == p } } }
+
+    /// Reasons the post can't be published as requested (empty = OK). Checked when scheduling, so a combination a
+    /// platform would reject (or silently change) never enters the queue.
+    public var problems: [String] {
+        var out: [String] = []
+        if platforms.isEmpty { out.append("Choose at least one platform.") }
+        if platforms.contains(.instagram), visibility != .public {
+            out.append("Instagram Reels are always public: set the visibility to public, or leave Instagram out.")
+        }
+        return out
+    }
 }
 
 /// The publishing queue, stored as one JSON document (e.g. `<library>/Publishing/queue.json`).
@@ -66,9 +84,55 @@ public final class PublishQueue: @unchecked Sendable {
 
     public func remove(_ id: UUID) throws { try mutate { $0.removeAll { $0.id == id } } }
 
+    /// Statuses a run may start from: due posts, and failed ones when the user explicitly retries.
+    public static let runnableStatuses: Set<ScheduledPost.Status> = [.scheduled, .partial, .failed]
+
+    /// Atomically takes ownership of a post for this process: under the queue lock, moves it from one of `from` to
+    /// `.exporting` and returns the claimed (current) post. Returns nil when it isn't claimable — already running in
+    /// the app or the LaunchAgent, posted, cancelled or removed — so two runners never export and upload it twice.
+    public func claim(_ id: UUID, from: Set<ScheduledPost.Status> = PublishQueue.runnableStatuses,
+                      pid: Int32 = getpid(), now: Date = Date()) throws -> ScheduledPost? {
+        try mutate { posts in
+            guard let i = posts.firstIndex(where: { $0.id == id }), from.contains(posts[i].status),
+                  !posts[i].status.isRunning else { return nil }
+            posts[i].status = .exporting
+            posts[i].runnerPID = pid
+            posts[i].updated = now
+            return posts[i]
+        }
+    }
+
+    /// Puts posts whose run was interrupted (the app or CLI crashed or quit mid-export/upload) back in the queue, so
+    /// they aren't shown as in progress forever and are retried by the next run. A run counts as interrupted when its
+    /// process is gone, when it has no recorded process and hasn't changed for `timeout`, or after `maxRunTime`
+    /// regardless (guards against a reused process id). Returns the requeued posts.
+    @discardableResult
+    public func recoverInterrupted(now: Date = Date(), timeout: TimeInterval = 2 * 3600, maxRunTime: TimeInterval = 12 * 3600,
+                                   isAlive: (Int32) -> Bool = PublishQueue.processIsAlive) throws -> [ScheduledPost] {
+        try mutate { posts in
+            var recovered: [ScheduledPost] = []
+            for i in posts.indices where posts[i].status.isRunning {
+                let age = now.timeIntervalSince(posts[i].updated)
+                let stale = age > maxRunTime || (posts[i].runnerPID.map { !isAlive($0) } ?? (age > timeout))
+                guard stale else { continue }
+                posts[i].errors["interrupted"] = "The run was interrupted while \(posts[i].status.rawValue) (Clipper quit or crashed); it will be retried. Check the platform for a partial upload."
+                posts[i].status = posts[i].results.isEmpty ? .scheduled : .partial
+                posts[i].runnerPID = nil
+                posts[i].updated = now
+                recovered.append(posts[i])
+            }
+            return recovered
+        }
+    }
+
+    /// True while a process with this id exists (EPERM: it exists but belongs to someone else).
+    public static func processIsAlive(_ pid: Int32) -> Bool {
+        pid > 0 && (kill(pid, 0) == 0 || errno == EPERM)
+    }
+
     // MARK: Storage
 
-    private func mutate(_ body: (inout [ScheduledPost]) -> Void) throws {
+    private func mutate<R>(_ body: (inout [ScheduledPost]) throws -> R) throws -> R {
         try lock.withLock {
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
             // Cross-process exclusion (app + CLI): an advisory lock on a sibling file.
@@ -78,8 +142,9 @@ public final class PublishQueue: @unchecked Sendable {
             defer { flock(fd, LOCK_UN); close(fd) }
             flock(fd, LOCK_EX)
             var posts = try load()
-            body(&posts)
+            let result = try body(&posts)
             try ClipperJSON.encode(posts.sorted { $0.scheduledAt < $1.scheduledAt }).write(to: url, options: .atomic)
+            return result
         }
     }
 

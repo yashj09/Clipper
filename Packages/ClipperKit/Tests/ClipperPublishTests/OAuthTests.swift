@@ -157,13 +157,36 @@ final class FakeBrowser: Sendable {
         defer { auth.mock.stop() }
         let browser = FakeBrowser()
         let client = OAuthClient(config: auth.config())
-        await #expect(throws: OAuthError.stateMismatch) {
-            _ = try await client.authorize(timeout: .seconds(20), open: browser.open)
+        // A forged redirect gets an error page but doesn't settle the sign-in: the flow keeps waiting (here: times out).
+        await #expect(throws: OAuthError.timedOut) {
+            _ = try await client.authorize(timeout: .seconds(1), open: browser.open)
         }
         #expect(auth.state.value.tokenRequests.isEmpty)   // no code exchange happened
         let (status, html) = try await browser.finalPage()
         #expect(status == 400)
         #expect(html.contains("state mismatch"))
+    }
+
+    @Test func strayCallbackDoesNotAbortSignIn() async throws {
+        let auth = try await MockAuthServer()
+        defer { auth.mock.stop() }
+        let browser = FakeBrowser()
+        let stray = Box<Int>(0)
+        let client = OAuthClient(config: auth.config())
+        // Before the real redirect arrives, something else hits the callback (a stale tab, a scanner).
+        let token = try await client.authorize(timeout: .seconds(20)) { url in
+            let redirect = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "redirect_uri" }?.value
+            Task {
+                if let redirect, let strayURL = URL(string: redirect + "?code=evil&state=someone-else"),
+                   let (_, response) = try? await URLSession.shared.data(from: strayURL) {
+                    stray.update { $0 = (response as? HTTPURLResponse)?.statusCode ?? 0 }
+                }
+                browser.open(url)
+            }
+        }
+        #expect(stray.value == 400)
+        #expect(token.accessToken == "access-1")
+        #expect(auth.state.value.tokenRequests.count == 1)
     }
 
     @Test func providerErrorIsReported() async throws {

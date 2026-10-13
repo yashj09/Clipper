@@ -41,7 +41,8 @@ public struct KeychainCredentialStore: CredentialStore {
             var add = baseQuery(key)
             add[kSecValueData as String] = value
             add[kSecAttrLabel as String] = "Clipper publishing (\(key))"
-            add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+            // No kSecAttrAccessible: the file-based login keychain ignores it (it applies to the data protection
+            // keychain only); access is governed by the item's ACL (the creating binary) and the keychain's lock state.
             let addStatus = SecItemAdd(add as CFDictionary, nil)
             guard addStatus == errSecSuccess else { throw KeychainError(status: addStatus, operation: "add \(key)") }
         default:

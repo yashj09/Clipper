@@ -52,6 +52,9 @@ def _configure_env() -> None:
 
 
 MAIN_REPO = "ACE-Step/Ace-Step1.5"
+# Pinned like the ACE-Step code in pyproject.toml: weights from the repo's moving `main` could stop matching the pinned
+# code (or change unreviewed). This is the revision the worker was tested with.
+MAIN_REVISION = "19671f406d603126926c1b7e2adc169acbcade22"
 # What text2music needs without the LM: DiT, VAE and text encoder (~6.3 GB). The 1.7B LM (~3.8 GB) is fetched only
 # when a request asks for `thinking`.
 CORE_COMPONENTS = ("acestep-v15-turbo", "vae", "Qwen3-Embedding-0.6B")
@@ -79,7 +82,7 @@ def ensure_weights(components: tuple, ctx: RequestContext, start: float, end: fl
 
     ckpt = checkpoints_dir()
     ckpt.mkdir(parents=True, exist_ok=True)
-    info = HfApi().model_info(MAIN_REPO, files_metadata=True)
+    info = HfApi().model_info(MAIN_REPO, revision=MAIN_REVISION, files_metadata=True)
     wanted = [s for s in info.siblings if s.rfilename.split("/")[0] in missing or "/" not in s.rfilename]
     total = sum(s.size or 0 for s in wanted) or 1
     staging = ckpt / ".cache" / "huggingface" / "download"
@@ -108,7 +111,7 @@ def ensure_weights(components: tuple, ctx: RequestContext, start: float, end: fl
     reporter = threading.Thread(target=report, name="download-progress", daemon=True)
     reporter.start()
     try:
-        snapshot_download(MAIN_REPO, local_dir=str(ckpt),
+        snapshot_download(MAIN_REPO, revision=MAIN_REVISION, local_dir=str(ckpt),
                           allow_patterns=[f"{c}/*" for c in missing] + [s.rfilename for s in wanted if "/" not in s.rfilename])
     finally:
         stop.set()

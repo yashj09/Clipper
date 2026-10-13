@@ -106,7 +106,7 @@ final class MockYouTube: Sendable {
         #expect(await publisher.isConnected())
         let request = PublishRequest(file: video, title: "My clip", description: "Made with Clipper.",
                                      tags: ["#travel", "slow motion", "travel"], visibility: .public,
-                                     captions: [spanish, plain], attributions: ["Song by Artist (CC BY 4.0)"], isShort: true)
+                                     captions: [.init(url: spanish), .init(url: plain)], attributions: ["Song by Artist (CC BY 4.0)"], isShort: true)
         let fractions = Box<[Double]>([])
         let result = try await publisher.publish(request) { progress in fractions.update { $0.append(progress.fraction) } }
 

@@ -57,7 +57,11 @@ final class TimelineCanvas: NSView {
     private var waveforms: [AssetID: WaveformPeaks] = [:]
     private var waveformRequests = Set<AssetID>()
     private var thumbs: [String: CGImage] = [:]
+    private var thumbOrder: [String] = []
     private var thumbRequests = Set<String>()
+    /// Filmstrip frames kept here (Thumbnailer has its own bounded cache to refill from).
+    static let thumbLimit = 600
+    private var layoutScheduled = false
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -110,6 +114,17 @@ final class TimelineCanvas: NSView {
     }
 
     // MARK: Layout
+
+    /// One relayout for a burst of async results (a filmstrip finishes many thumbnails at once).
+    private func scheduleLayout() {
+        guard !layoutScheduled else { return }
+        layoutScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.layoutScheduled = false
+            self.layoutTimeline()
+        }
+    }
 
     func layoutTimeline(rebuildRows: Bool = false) {
         guard let timeline else { return }
@@ -205,9 +220,13 @@ final class TimelineCanvas: NSView {
             let url = asset.proxyURL ?? asset.renderURL
             Task { [weak self] in
                 let img = await Thumbnailer.shared.thumbnail(url, at: q, height: 64, grid: grid)
-                guard let self else { return }
+                // A frame that couldn't be made stays "requested" so it isn't retried on every layout.
+                guard let self, let img else { return }
+                self.thumbRequests.remove(key)   // re-requested if evicted below
                 self.thumbs[key] = img
-                self.layoutTimeline()
+                self.thumbOrder.append(key)
+                if self.thumbOrder.count > Self.thumbLimit { self.thumbs[self.thumbOrder.removeFirst()] = nil }
+                self.scheduleLayout()
             }
         }
         return nil
@@ -221,7 +240,7 @@ final class TimelineCanvas: NSView {
                 let peaks = try? await WaveformPeaks.build(url: url)
                 guard let self else { return }
                 self.waveforms[asset.id] = peaks
-                self.layoutTimeline()
+                self.scheduleLayout()
             }
         }
         return nil
@@ -339,8 +358,9 @@ final class TimelineCanvas: NSView {
             var start = max(0, time(at: p.x) - grab)
             let duration = item.range.duration.seconds
             start = snap(start, exclude: item.id, alsoEnd: duration)
-            let target = row(at: p.y).flatMap { r in compatible(r.track.kind, with: item) ? r : nil }
-                ?? rows.first { $0.track.id == fromTrack }!
+            // The timeline can change under a drag (undo from the menu): drop the drag if its rows are gone.
+            guard let target = row(at: p.y).flatMap({ r in compatible(r.track.kind, with: item) ? r : nil })
+                    ?? rows.first(where: { $0.track.id == fromTrack }) else { return cancelDrag() }
             let st = RationalTime(seconds: start).roundedToFrame(rate)
             dragTarget = (target.track.id, st)
             showGhost(x0: x(for: st.seconds), x1: x(for: st.seconds + duration), row: target)
@@ -348,12 +368,18 @@ final class TimelineCanvas: NSView {
             var t = time(at: p.x)
             t = snap(t, exclude: item.id, alsoEnd: nil)
             let st = RationalTime(seconds: t).roundedToFrame(rate)
-            dragTarget = (rows.first { $0.track.items.contains { $0.id == item.id } }!.track.id, st)
-            let r = rows.first { $0.track.items.contains { $0.id == item.id } }!
+            guard let r = rows.first(where: { $0.track.items.contains { $0.id == item.id } }) else { return cancelDrag() }
+            dragTarget = (r.track.id, st)
             let x0 = edge == .start ? x(for: st.seconds) : x(for: item.start.seconds)
             let x1 = edge == .end ? x(for: st.seconds) : x(for: item.end.seconds)
             showGhost(x0: min(x0, x1), x1: max(x0, x1), row: r)
         }
+    }
+
+    private func cancelDrag() {
+        dragState = nil
+        dragTarget = nil
+        ghostLayer.isHidden = true
     }
 
     override func mouseUp(with event: NSEvent) {
@@ -409,7 +435,8 @@ final class TimelineCanvas: NSView {
         case ("b", _): .blade
         case (_, 123): .stepBack          // ←
         case (_, 124): .stepForward       // →
-        case (_, 51), (_, 117): shift ? .rippleDelete : .delete   // ⌫ / ⌦
+        // ⌫ / ⌦ follow the "ripple by default" setting like trims and the toolbar; ⌥ inverts it, ⇧ always ripples.
+        case (_, 51), (_, 117): shift || rippleByDefault != event.modifierFlags.contains(.option) ? .rippleDelete : .delete
         case (_, 115): .home
         case (_, 119): .end
         case ("\\", _): .zoomFit

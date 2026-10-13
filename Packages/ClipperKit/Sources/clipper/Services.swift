@@ -4,6 +4,7 @@ import ClipperCore
 import ClipperEngine
 import ClipperLibrary
 import Foundation
+import Synchronization
 
 /// The CLI's wiring of library + engine + analysis + automation (the app wires the same pieces).
 struct Services {
@@ -97,13 +98,16 @@ struct Services {
         return try library.loadProject(first.id)
     }
 
-    /// Exports one timeline, printing a progress bar. Returns the output URL.
+    /// Exports one timeline, printing a progress bar. Returns the output URL. Caption sidecars follow the
+    /// "write sidecars" setting unless `honorSidecarSetting` is false (publishing needs them for YouTube captions).
     @discardableResult
-    func export(_ timeline: Timeline, project: String, preset presetID: String?, to path: String?) async throws -> URL {
+    func export(_ timeline: Timeline, project: String, preset presetID: String?, to path: String?,
+                honorSidecarSetting: Bool = true) async throws -> URL {
         let settings = try library.settings()
-        guard let preset = ExportPreset.named(presetID ?? settings.export.defaultPreset) else {
+        guard var preset = ExportPreset.named(presetID ?? settings.export.defaultPreset) else {
             throw ValidationErrorText("Unknown preset. Try: \(ExportPreset.builtIn.map(\.id).joined(separator: ", "))")
         }
+        if honorSidecarSetting { preset = preset.applying(settings.export) }
         let url: URL
         if let path { url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath) }
         else {
@@ -113,6 +117,9 @@ struct Services {
         }
         let assets = try assetMap()
         Console.line("Exporting \(preset.name) → \(url.path)")
+        if !preset.matchesAspect(of: timeline.canvas) {
+            Console.line("  Note: the timeline is \(timeline.canvas.width)×\(timeline.canvas.height); the frame is letterboxed to fit \(preset.width ?? 0)×\(preset.height ?? 0).")
+        }
         let result = try await Exporter.export(timeline, assets: assets, preset: preset, to: url) { p in
             Console.progress(p.fraction, String(format: "%.0f fps", p.framesPerSecond))
         }
@@ -134,20 +141,25 @@ struct ValidationErrorText: Error, CustomStringConvertible {
     init(_ d: String) { description = d }
 }
 
-/// Minimal terminal output: results on stdout, live status on stderr.
+/// Minimal terminal output: results on stdout, live status on stderr. Progress callbacks arrive on arbitrary threads,
+/// so writes are serialized by a lock.
 enum Console {
-    nonisolated(unsafe) static var statusShown = false
+    private static let state = Mutex(false)   // whether a status line is on screen
     static let isTTY = isatty(STDERR_FILENO) == 1
 
     static func line(_ s: String) {
-        clearStatus()
-        print(s)
+        state.withLock { shown in
+            clear(&shown)
+            print(s)
+        }
     }
 
     static func status(_ s: String) {
         guard isTTY else { return }
-        FileHandle.standardError.write(Data("\r\u{1B}[2K\(s.prefix(110))".utf8))
-        statusShown = true
+        state.withLock { shown in
+            FileHandle.standardError.write(Data("\r\u{1B}[2K\(s.prefix(110))".utf8))
+            shown = true
+        }
     }
 
     static func progress(_ fraction: Double, _ detail: String) {
@@ -155,10 +167,12 @@ enum Console {
         status("[\(String(repeating: "█", count: filled))\(String(repeating: "░", count: max(0, width - filled)))] \(Int(fraction * 100))% \(detail)")
     }
 
-    static func clearStatus() {
-        guard statusShown else { return }
+    static func clearStatus() { state.withLock { clear(&$0) } }
+
+    private static func clear(_ shown: inout Bool) {
+        guard shown else { return }
         FileHandle.standardError.write(Data("\r\u{1B}[2K".utf8))
-        statusShown = false
+        shown = false
     }
 
     static func table(_ rows: [[String]]) {

@@ -162,7 +162,8 @@ public actor PythonWorker {
     public static func isUVAvailable() -> Bool { findUV() != nil }
 
     /// The `worker/` project: `$CLIPPER_WORKER_DIR`, else `Contents/Resources/worker` in the app bundle, else the
-    /// first `worker/pyproject.toml` found walking up from the executable (or from this source file in dev builds).
+    /// first `worker/pyproject.toml` found walking up from the executable (or, in debug builds only, from this source
+    /// file — release binaries don't embed the build machine's source path).
     public static func defaultProjectDirectory() -> URL? {
         let fm = FileManager.default
         func isProject(_ url: URL) -> Bool { fm.fileExists(atPath: url.appending(path: "pyproject.toml").path) }
@@ -172,7 +173,10 @@ public actor PythonWorker {
             return isProject(url) ? url : nil
         }
         if let resources = Bundle.main.resourceURL?.appending(path: "worker"), isProject(resources) { return resources }
-        let starts = [Bundle.main.executableURL?.resolvingSymlinksInPath(), URL(fileURLWithPath: #filePath)]
+        var starts = [Bundle.main.executableURL?.resolvingSymlinksInPath()]
+        #if DEBUG
+        starts.append(URL(fileURLWithPath: #filePath))
+        #endif
         for start in starts.compactMap(\.self) {
             var dir = start.deletingLastPathComponent()
             while dir.pathComponents.count > 1 {

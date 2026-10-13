@@ -141,9 +141,8 @@ struct ExportSheet: View {
             Picker("Preset", selection: $presetID) {
                 ForEach(ExportPreset.builtIn) { Text($0.name).tag($0.id) }
             }
-            if let p = ExportPreset.named(presetID), let canvas = model.editor?.timeline.canvas,
-               let w = p.width, let h = p.height, abs(Double(w) / Double(h) - canvas.aspect) > 0.01 {
-                Text("⚠️ This preset's aspect ratio differs from the timeline (\(canvas.width)×\(canvas.height)); slots will be re-laid out.")
+            if let p = ExportPreset.named(presetID), let canvas = model.editor?.timeline.canvas, !p.matchesAspect(of: canvas) {
+                Text("⚠️ This preset's aspect ratio differs from the timeline (\(canvas.width)×\(canvas.height)); the video will be letterboxed to fit.")
                     .font(.caption).foregroundStyle(.orange)
             }
             if let credits = model.editor?.timeline.attributions, !credits.isEmpty {

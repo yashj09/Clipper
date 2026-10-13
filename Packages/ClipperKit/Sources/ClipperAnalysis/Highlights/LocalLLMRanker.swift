@@ -233,7 +233,8 @@ public struct LocalLLMRanker: Sendable {
 
     private func send(_ request: URLRequest) async throws -> (Data, Int) {
         do {
-            let (data, response) = try await session.data(for: request)
+            // Never follow redirects: a 3xx from the local server must not resend the transcript excerpts elsewhere.
+            let (data, response) = try await session.data(for: request, delegate: RefuseRedirects())
             return (data, (response as? HTTPURLResponse)?.statusCode ?? 0)
         } catch let error as URLError {
             if error.code == .cancelled || Task.isCancelled { throw CancellationError() }
@@ -377,4 +378,10 @@ extension LLMEndpoint {
         if Self.isCloudModel(model) { return "“\(model)” is a cloud-backed model" }
         return nil
     }
+}
+
+/// Stops URLSession from following redirects; the 3xx response is returned to the caller instead.
+private final class RefuseRedirects: NSObject, URLSessionTaskDelegate, Sendable {
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest) async -> URLRequest? { nil }
 }

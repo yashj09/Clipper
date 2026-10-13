@@ -34,13 +34,21 @@ public enum Transcoder {
                     "-map", "0:v:0?", "-map", "0:a:0?",
                     "-c:v", "hevc_videotoolbox", "-profile:v", "main10", "-pix_fmt", "p010le", "-q:v", "70", "-tag:v", "hvc1",
                     "-c:a", "pcm_s16le", "-fps_mode", "passthrough", tmp.path]
-        try await EncodeScheduler.shared.run(.background) {
-            try await run(ffmpeg, args)
+        do {
+            try await EncodeScheduler.shared.run(.background) {
+                try await run(ffmpeg, args)
+            }
+        } catch {
+            try? FileManager.default.removeItem(at: tmp)
+            throw error
         }
         try FileManager.default.moveItem(at: tmp, to: out)
         return out
     }
 
+    /// Runs `exe` to completion. stderr is drained as it arrives (a chatty decode would otherwise fill the pipe and block
+    /// FFmpeg forever while it holds the encode slot) and only its tail is kept for the error; cancelling the task
+    /// terminates the process.
     static func run(_ exe: URL, _ args: [String]) async throws {
         let process = Process()
         process.executableURL = exe
@@ -48,12 +56,49 @@ public enum Transcoder {
         let errPipe = Pipe()
         process.standardError = errPipe
         process.standardOutput = FileHandle.nullDevice
-        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-            process.terminationHandler = { p in
-                let log = String(decoding: errPipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-                if p.terminationStatus == 0 { cont.resume() } else { cont.resume(throwing: TranscodeError.failed(log)) }
+        let log = LogTail()
+        errPipe.fileHandleForReading.readabilityHandler = { handle in log.append(handle.availableData) }
+        let box = UncheckedSendable(process)
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+                process.terminationHandler = { p in
+                    errPipe.fileHandleForReading.readabilityHandler = nil
+                    log.append(errPipe.fileHandleForReading.readDataToEndOfFile())
+                    if p.terminationStatus == 0 { cont.resume() }
+                    else if log.cancelled { cont.resume(throwing: CancellationError()) }
+                    else { cont.resume(throwing: TranscodeError.failed(log.text)) }
+                }
+                do { try process.run() } catch {
+                    errPipe.fileHandleForReading.readabilityHandler = nil
+                    cont.resume(throwing: error)
+                }
+                // Cancelled before the process started: the handler below found nothing to stop.
+                if log.cancelled, process.isRunning { process.terminate() }
             }
-            do { try process.run() } catch { cont.resume(throwing: error) }
+        } onCancel: {
+            log.cancelled = true
+            if box.value.isRunning { box.value.terminate() }
+        }
+    }
+
+    /// The last few KB of a process's stderr (thread-safe).
+    final class LogTail: @unchecked Sendable {
+        private let lock = NSLock()
+        private var data = Data()
+        private var wasCancelled = false
+        static let limit = 16 << 10
+
+        func append(_ chunk: Data) {
+            guard !chunk.isEmpty else { return }
+            lock.withLock {
+                data.append(chunk)
+                if data.count > Self.limit { data = data.suffix(Self.limit) }
+            }
+        }
+        var text: String { lock.withLock { String(decoding: data, as: UTF8.self) } }
+        var cancelled: Bool {
+            get { lock.withLock { wasCancelled } }
+            set { lock.withLock { wasCancelled = newValue } }
         }
     }
 
