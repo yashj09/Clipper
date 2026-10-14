@@ -48,6 +48,7 @@ struct MainView: View {
         .sheet(item: $model.highlightSession) { session in HighlightsSheet(model: model, session: session) }
         .sheet(isPresented: $model.saveTemplateSheet) { SaveTemplateSheet(model: model) }
         .sheet(isPresented: $model.publishSheet) { PublishSheet(model: model) }
+        .sheet(isPresented: $model.redraftSheet) { if let editor = model.editor { RedraftSheet(model: model, editor: editor) } }
         .sheet(item: $model.templateEdit) { req in TemplateEditorSheet(model: model, original: req.template, isNew: req.isNew) }
         .alert("Clipper", isPresented: Binding(get: { model.alert != nil }, set: { if !$0 { model.alert = nil } })) {
             Button("OK") { model.alert = nil }
@@ -309,6 +310,9 @@ struct EditorView: View {
                 Button { editor.run(.zoomOut) } label: { Label("Zoom Out", systemImage: "minus.magnifyingglass") }.help(help(.zoomOut))
                 Button { editor.run(.zoomToFit) } label: { Label("Fit", systemImage: "arrow.left.and.right") }.help(help(.zoomToFit))
                 Button { editor.run(.zoomIn) } label: { Label("Zoom In", systemImage: "plus.magnifyingglass") }.help(help(.zoomIn))
+                Button { model.redraftSheet = true } label: { Label("Re-draft", systemImage: "wand.and.stars") }
+                    .help("Run the automatic draft again (another template or variation), keeping what you locked or added")
+                    .disabled(editor.timeline.provenance == nil)
                 CaptionsMenu(editor: editor)
                 Button { model.saveTemplateSheet = true } label: { Label("Save as Template", systemImage: "rectangle.stack.badge.plus") }
                     .help("Save this layout, titles, captions and music settings as a reusable template")

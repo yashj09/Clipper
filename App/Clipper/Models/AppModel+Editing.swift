@@ -115,3 +115,41 @@ struct AddAttribution: EditCommand {
         return t
     }
 }
+
+// MARK: Re-draft
+
+@MainActor
+extension AppModel {
+    /// A request re-running the open timeline's draft from its recorded clips, with a (possibly different) template and
+    /// options. Clips in a slot the new template doesn't have are left out. Nil when the timeline wasn't drafted.
+    func redraftRequest(template: Template, seed: UInt64, title: String, captions: Bool, music: Bool) -> DraftRequest? {
+        guard let editor, let record = Redraft.record(of: editor.timeline) else { return nil }
+        let oldPrimary = editor.timeline.provenance.flatMap { p in templates.first { $0.id == p.template } }?.primarySlot?.id
+        let newSlots = Set(template.slots.map(\.id))
+        var request = DraftRequest(template: template, primary: [], title: title, captions: captions, music: music,
+                                   maxDuration: record.maxDuration, seed: seed)
+        for clip in record.clips {
+            if clip.slot == nil || clip.slot == oldPrimary || clip.slot == template.primarySlot?.id {
+                request.primary.append(clip.asset)
+            } else if let slot = clip.slot, newSlots.contains(slot) {
+                request.slots[slot, default: []].append(clip.asset)
+            }
+            if clip.inPoint != nil || clip.outPoint != nil {
+                request.trims[clip.asset] = (clip.inPoint ?? 0)...(clip.outPoint ?? .greatestFiniteMagnitude)
+            }
+        }
+        return request
+    }
+
+    /// Re-drafts the open timeline, keeping the user's locked and added items (one undo step).
+    func redraft(_ request: DraftRequest) async {
+        guard let editor, let result = await makeDraft(request) else { return }
+        let merged = Redraft.merge(editor.timeline, into: result.timeline, context: editor.context)
+        editor.perform(ReplaceTimeline(merged.timeline, name: "Re-draft"))
+        let note = "Kept \(merged.kept) of your item\(merged.kept == 1 ? "" : "s") · ⌘Z goes back"
+        activity = Activity(title: "Re-drafted with \(request.template.name)", detail: note, progress: 1)
+        if !result.report.warnings.isEmpty { alert = "Re-drafted.\n\n" + result.report.warnings.map { "⚠️ " + $0 }.joined(separator: "\n") }
+        try? await Task.sleep(for: .seconds(3))
+        if activity?.detail == note { activity = nil }
+    }
+}

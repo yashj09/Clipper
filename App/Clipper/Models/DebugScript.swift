@@ -70,6 +70,14 @@ enum DebugScript {
         case "dump":
             guard let editor = model.editor else { return }
             try? summary(editor).write(toFile: rest, atomically: true, encoding: .utf8)
+        case "redraft":
+            // redraft <template id> <seed>
+            let parts = rest.split(separator: " ").map(String.init)
+            guard parts.count == 2, let t = model.templates.first(where: { $0.id == parts[0] }), let seed = UInt64(parts[1]),
+                  let r = model.redraftRequest(template: t, seed: seed, title: "Re-drafted", captions: true, music: false)
+            else { return log("bad redraft") }
+            await model.redraft(r)
+            if let a = model.alert { log("alert: \(a)"); model.alert = nil }
         case "bind":
             // bind <action> <shortcut spec>: the same path as recording a shortcut in Settings.
             let parts = rest.split(separator: " ").map(String.init)

@@ -252,7 +252,8 @@ public enum DraftPipeline {
         }.map(\.element)
 
         timeline.provenance = Provenance(template: template.id, templateVersion: template.version, seed: input.settings.seed,
-                                         passes: ["cut", "layout", "visual", "captions", "music", "elements"])
+                                         passes: ["cut", "layout", "visual", "captions", "music", "elements"],
+                                         inputs: input.record)
         var durations = Dictionary(uniqueKeysWithValues: input.clips.map { ($0.asset.id, $0.asset.info.duration) })
         for a in added { durations[a.id] = a.info.duration }
         for issue in timeline.validate(assetDurations: durations) where issue.severity == .error {

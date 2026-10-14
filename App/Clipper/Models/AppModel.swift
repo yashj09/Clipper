@@ -20,6 +20,8 @@ struct DraftRequest {
     var musicID: String?
     var maxDuration: Double?
     var seed: UInt64 = 1
+    /// Source trims per clip, in seconds (highlights and re-drafts of them).
+    var trims: [AssetID: ClosedRange<Double>] = [:]
 }
 
 /// A long-running task shown in the window (import, analysis, export).
@@ -50,6 +52,7 @@ final class AppModel {
     var highlightSession: HighlightSession?
     var saveTemplateSheet = false
     var publishSheet = false
+    var redraftSheet = false
     var templateEdit: TemplateEditRequest?
 
     /// Routes keyboard shortcuts in the main window (installed by MainView).
@@ -158,14 +161,31 @@ final class AppModel {
     // MARK: Draft
 
     func createDraft(_ request: DraftRequest) async {
-        guard let library else { return }
+        guard let library, let result = await makeDraft(request) else { return }
+        let name = result.timeline.name
+        do {
+            let saved = try library.saveProject(Project(name: name, timelines: [result.timeline]))
+            refresh()
+            open(saved.id)
+            activity = nil
+            let summary = (result.report.notes + result.report.warnings.map { "⚠️ " + $0 }).joined(separator: "\n")
+            if !result.report.warnings.isEmpty { alert = "Draft created.\n\n" + summary }
+        } catch {
+            activity = nil
+            alert = "Couldn't save the draft: \(error)"
+        }
+    }
+
+    /// Analyzes the request's clips (cached by content, so re-drafting the same clips is instant), runs the draft and
+    /// registers any music it picked. Leaves `activity` showing "Drafting" on success; nil (with an alert) on failure.
+    func makeDraft(_ request: DraftRequest) async -> DraftResult? {
+        guard let library else { return nil }
         let byID = allAssets
         let primary = request.primary.compactMap { byID[$0] }
         let others = request.slots.flatMap { slot, ids in ids.compactMap { byID[$0] }.map { ($0, slot) } }
         let all = primary.map { ($0, nil as String?) } + others.map { ($0.0, Optional($0.1)) }
-        guard !primary.isEmpty else { alert = "Add at least one clip to the \(request.template.primarySlot?.name ?? "main") slot."; return }
+        guard !primary.isEmpty else { alert = "Add at least one clip to the \(request.template.primarySlot?.name ?? "main") slot."; return nil }
 
-        // Analysis (cached by content, so re-drafting the same clips is instant).
         var kinds: Set<AnalysisKind> = []
         let rules = request.template.rules
         if rules.silenceCut != nil || rules.captions != nil || rules.duck != nil { kinds.formUnion([.speech, .transcript]) }
@@ -185,14 +205,17 @@ final class AppModel {
         } catch {
             activity = nil
             alert = "Analysis failed: \(error)"
-            return
+            return nil
         }
 
         activity = Activity(title: "Drafting", detail: request.template.name)
         let musicPool = music.filter { FileManager.default.fileExists(atPath: $0.url.path) }
         let name = request.title.isEmpty ? (primary.first?.name ?? "Untitled") : request.title
-        let input = DraftInput(template: request.template,
-                               clips: all.map { ClipInput(asset: $0.0, analysis: analysis[$0.0.id] ?? AssetAnalysis(), slot: $0.1) },
+        let clips = all.map { asset, slot in
+            ClipInput(asset: asset, analysis: analysis[asset.id] ?? AssetAnalysis(), slot: slot,
+                      inPoint: request.trims[asset.id]?.lowerBound, outPoint: request.trims[asset.id]?.upperBound)
+        }
+        let input = DraftInput(template: request.template, clips: clips,
                                music: request.music ? musicPool : [],
                                settings: DraftSettings(title: request.title.isEmpty ? nil : request.title, seed: request.seed,
                                                        captions: request.captions, music: request.music,
@@ -200,16 +223,12 @@ final class AppModel {
         let result = DraftPipeline.run(input)
         do {
             for asset in result.addedAssets { _ = try await library.importMedia([asset.url], mode: .reference) { _ in asset } }
-            let saved = try library.saveProject(Project(name: name, timelines: [result.timeline]))
-            refresh()
-            open(saved.id)
-            activity = nil
-            let summary = (result.report.notes + result.report.warnings.map { "⚠️ " + $0 }).joined(separator: "\n")
-            if !result.report.warnings.isEmpty { alert = "Draft created.\n\n" + summary }
         } catch {
             activity = nil
-            alert = "Couldn't save the draft: \(error)"
+            alert = "Couldn't add the draft's music: \(error)"
+            return nil
         }
+        return result
     }
 
     // MARK: Highlights (long recordings → many shorts)

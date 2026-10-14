@@ -5,7 +5,7 @@ import Foundation
 
 extension Timeline {
     /// Where a new track of `kind` goes so the stacking stays sensible: footage under titles, titles under captions.
-    func insertionIndex(forNew kind: TrackKind) -> Int {
+    public func insertionIndex(forNew kind: TrackKind) -> Int {
         let above: Set<TrackKind> = switch kind {
         case .video, .overlay: [.title, .caption]
         case .title: [.caption]
