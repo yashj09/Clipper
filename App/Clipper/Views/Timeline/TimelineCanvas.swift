@@ -34,7 +34,7 @@ final class TimelineCanvas: NSView {
     weak var delegate: TimelineCanvasDelegate?
 
     // State pushed from SwiftUI
-    var timeline: Timeline? { didSet { layoutTimeline(rebuildRows: true) } }
+    var timeline: Timeline? { didSet { layoutTimeline(rebuildRows: true); if pendingFit { zoomToFit() } } }
     var selection: Set<ItemID> = [] { didSet { if selection != oldValue { layoutTimeline() } } }
     var playhead: RationalTime = .zero { didSet { if playhead != oldValue { positionPlayhead(); autoScrollToPlayhead() } } }
     var assets: [AssetID: MediaAsset] = [:]
@@ -73,6 +73,8 @@ final class TimelineCanvas: NSView {
     /// Filmstrip frames kept here (Thumbnailer has its own bounded cache to refill from).
     static let thumbLimit = 600
     private var layoutScheduled = false
+    /// A zoom-to-fit asked for before there was a timeline or a width to fit it into (the view's first update).
+    private var pendingFit = false
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -128,7 +130,7 @@ final class TimelineCanvas: NSView {
         ruler.frame = CGRect(x: 0, y: 0, width: bounds.width, height: Self.rulerHeight)
         headers.frame = CGRect(x: 0, y: Self.rulerHeight, width: Self.headerWidth, height: bounds.height - Self.rulerHeight)
         itemsLayer.frame = CGRect(x: 0, y: Self.rulerHeight, width: bounds.width, height: bounds.height - Self.rulerHeight)
-        layoutTimeline()
+        if pendingFit { zoomToFit() } else { layoutTimeline() }
     }
 
     // MARK: Layout
@@ -330,7 +332,8 @@ final class TimelineCanvas: NSView {
     }
 
     func zoomToFit() {
-        guard let d = timeline?.duration.seconds, d > 0 else { return }
+        guard let d = timeline?.duration.seconds, d > 0, bounds.width > Self.headerWidth + 60 else { pendingFit = true; return }
+        pendingFit = false
         pxPerSecond = max(0.5, (bounds.width - Self.headerWidth - 30) / CGFloat(d))
         scrollSeconds = 0
         layoutTimeline()
@@ -609,6 +612,7 @@ final class ItemLayer: CALayer {
     private let label = CATextLayer()
     private let filmstrip = CALayer()
     private let wave = CAShapeLayer()
+    private let keyMarks = CAShapeLayer()
     private var tiles: [CALayer] = []
 
     static func color(_ kind: TrackKind) -> NSColor {
@@ -631,6 +635,10 @@ final class ItemLayer: CALayer {
         addSublayer(filmstrip)
         wave.fillColor = NSColor.white.withAlphaComponent(0.55).cgColor
         addSublayer(wave)
+        keyMarks.fillColor = NSColor.systemYellow.cgColor
+        keyMarks.strokeColor = NSColor.black.withAlphaComponent(0.8).cgColor
+        keyMarks.lineWidth = 1
+        addSublayer(keyMarks)
         label.fontSize = 11
         label.contentsScale = 2
         label.foregroundColor = NSColor.white.cgColor
@@ -658,6 +666,25 @@ final class ItemLayer: CALayer {
         label.frame = CGRect(x: 5, y: 2, width: max(0, bounds.width - 10), height: 14)
         filmstrip.frame = CGRect(x: 0, y: 16, width: bounds.width, height: bounds.height - 16)
         wave.frame = CGRect(x: 0, y: kind.isVisual ? bounds.height - 18 : 16, width: bounds.width, height: kind.isVisual ? 18 : bounds.height - 16)
+        setKeyframes(item)
+    }
+
+    /// Diamonds along the bottom edge at the item's keyframes; ones closer than 7 points merge (reframing can make
+    /// hundreds of focus keys).
+    private func setKeyframes(_ item: Item) {
+        keyMarks.frame = bounds
+        let times = item.visualKeyframeTimes, d = item.range.duration.seconds
+        guard !times.isEmpty, d > 0, bounds.width > 12 else { keyMarks.path = nil; return }
+        let path = CGMutablePath(), y = bounds.height - 8, r: CGFloat = 5
+        var last = -CGFloat.infinity
+        for t in times {
+            let x = min(max(CGFloat(t.seconds / d) * bounds.width, r), bounds.width - r)
+            guard x - last >= 7 else { continue }
+            last = x
+            path.addLines(between: [CGPoint(x: x, y: y - r), CGPoint(x: x + r, y: y), CGPoint(x: x, y: y + r), CGPoint(x: x - r, y: y)])
+            path.closeSubpath()
+        }
+        keyMarks.path = path
     }
 
     func setThumbnails(_ images: [CGImage?], tileWidth: CGFloat = 0) {

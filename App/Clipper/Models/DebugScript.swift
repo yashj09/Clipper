@@ -78,6 +78,19 @@ enum DebugScript {
             else { return log("bad redraft") }
             await model.redraft(r)
             if let a = model.alert { log("alert: \(a)"); model.alert = nil }
+        case "select":
+            // select <track kind> <item index>
+            let parts = rest.split(separator: " ").map(String.init)
+            guard parts.count == 2, let kind = TrackKind(rawValue: parts[0]), let i = Int(parts[1]), let editor = model.editor,
+                  let item = editor.timeline.tracks.first(where: { $0.kind == kind })?.items[safe: i] else { return log("bad select") }
+            editor.selection = [item.id]
+        case "keyframe":
+            // keyframe opacity <item seconds> <value> — on the selected item, the same edit the inspector's ◆ makes
+            let parts = rest.split(separator: " ").map(String.init)
+            guard parts.count == 3, parts[0] == "opacity", let t = Double(parts[1]), let v = Double(parts[2]),
+                  let editor = model.editor, let id = editor.selection.first else { return log("bad keyframe") }
+            let half = editor.timeline.canvas.frameRate.frameDuration * 0.5
+            editor.perform(ModifyItem(id, name: "Add Keyframe") { $0.opacity = $0.opacity.setting(v, at: RationalTime(seconds: t), tolerance: half) })
         case "bind":
             // bind <action> <shortcut spec>: the same path as recording a shortcut in Settings.
             let parts = rest.split(separator: " ").map(String.init)
@@ -153,5 +166,8 @@ enum DebugScript {
                                 windowNumber: window.windowNumber, context: nil, characters: chars,
                                 charactersIgnoringModifiers: chars, isARepeat: false, keyCode: code)
     }
+}
+extension Array {
+    subscript(safe i: Int) -> Element? { indices.contains(i) ? self[i] : nil }
 }
 #endif

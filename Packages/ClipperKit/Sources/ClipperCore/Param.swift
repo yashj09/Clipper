@@ -165,3 +165,40 @@ extension Param: Codable {
 extension Comparable {
     func clamped(_ lo: Self, _ hi: Self) -> Self { min(max(self, lo), hi) }
 }
+
+// MARK: - Keyframe editing
+
+extension Param {
+    /// The keyframe at `t` (item-relative), if one is within `tolerance` (half a frame, typically).
+    public func key(at t: RationalTime, tolerance: RationalTime) -> Keyframe<Value>? {
+        keys.first { abs(($0.time - t).seconds) <= tolerance.seconds }
+    }
+
+    /// Sets a keyframe at `t`: replaces one within `tolerance`, else adds one. A constant becomes a single keyframe
+    /// (still constant in effect) so the next key the user adds starts the animation from it.
+    public func setting(_ value: Value, at t: RationalTime, tolerance: RationalTime, interpolation: Interpolation = .easeInOut) -> Param {
+        var k = keys.filter { abs(($0.time - t).seconds) > tolerance.seconds }
+        let existing = key(at: t, tolerance: tolerance)
+        k.append(Keyframe(existing?.time ?? t, value, existing?.interpolation ?? interpolation))
+        return .keyframes(k.sorted { $0.time < $1.time })
+    }
+
+    /// Removes the keyframe at `t`; removing the last one leaves the value it had as a constant.
+    public func removingKey(at t: RationalTime, tolerance: RationalTime) -> Param {
+        guard case .keyframes(let k) = self else { return self }
+        let rest = k.filter { abs(($0.time - t).seconds) > tolerance.seconds }
+        if rest.count == k.count { return self }
+        return rest.isEmpty ? .constant(value(at: t)) : .keyframes(rest)
+    }
+}
+
+extension Item {
+    /// Item-relative times of every visual keyframe (position, scale, rotation, zoom, focus, opacity) — what the
+    /// timeline marks on the clip. Gain keys are left out: ducking writes dozens of them.
+    public var visualKeyframeTimes: [RationalTime] {
+        let t = transform
+        let all = t.position.keys.map(\.time) + t.scale.keys.map(\.time) + t.rotation.keys.map(\.time)
+            + t.zoom.keys.map(\.time) + t.focus.keys.map(\.time) + opacity.keys.map(\.time)
+        return Array(Set(all)).sorted()
+    }
+}

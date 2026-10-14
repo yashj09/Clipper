@@ -65,16 +65,21 @@ private struct ItemInspector: View {
         default: EmptyView()
         }
         if editor.timeline.tracks.first(where: { $0.items.contains { $0.id == item.id } })?.kind.isVisual == true {
-            Section("Transform") {
-                slider("Scale", item.transform.scale.value(at: .zero), 0.1...3) { v in modify("Scale", key: "scale") { $0.transform.scale = .constant(v) } }
-                slider("Zoom", item.transform.zoom.value(at: .zero), 1...3) { v in modify("Zoom", key: "zoom") { $0.transform.zoom = .constant(v) } }
-                slider("X", item.transform.position.value(at: .zero).x, 0...1) { v in modify("Move", key: "x") { $0.transform.position = .constant(NormPoint(v, $0.transform.position.value(at: .zero).y)) } }
-                slider("Y", item.transform.position.value(at: .zero).y, 0...1) { v in modify("Move", key: "y") { $0.transform.position = .constant(NormPoint($0.transform.position.value(at: .zero).x, v)) } }
-                slider("Rotation", item.transform.rotation.value(at: .zero), -180...180) { v in modify("Rotate", key: "rot") { $0.transform.rotation = .constant(v) } }
-                slider("Opacity", item.opacity.value(at: .zero), 0...1) { v in modify("Opacity", key: "opacity") { $0.opacity = .constant(v) } }
-                if item.transform.zoom.isAnimated || item.transform.focus.isAnimated {
-                    Text("Animated by the draft (zoom/reframe). Editing here replaces the animation.").font(.caption).foregroundStyle(.secondary)
-                }
+            Section {
+                keyed("Scale", 0.1...3, name: "Scale", key: "scale", { $0.transform.scale }, { $0.transform.scale = $1 })
+                keyed("Zoom", 1...3, name: "Zoom", key: "zoom", { $0.transform.zoom }, { $0.transform.zoom = $1 })
+                keyed("X", 0...1, name: "Move", key: "x", { $0.transform.position }, { $0.transform.position = $1 },
+                      get: { $0.x }, set: { NormPoint($1, $0.y) })
+                keyed("Y", 0...1, name: "Move", key: "y", { $0.transform.position }, { $0.transform.position = $1 },
+                      get: { $0.y }, set: { NormPoint($0.x, $1) })
+                keyed("Rotation", -180...180, name: "Rotate", key: "rot", { $0.transform.rotation }, { $0.transform.rotation = $1 })
+                keyed("Opacity", 0...1, name: "Opacity", key: "opacity", { $0.opacity }, { $0.opacity = $1 })
+            } header: {
+                Text("Transform")
+            } footer: {
+                Text(local == nil ? "Move the playhead over this clip to add keyframes."
+                                  : "◆ adds a keyframe at the playhead. Once a property has keyframes, dragging its slider sets the value at the playhead.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
         }
         if let ref = item.content.mediaRef {
@@ -98,7 +103,7 @@ private struct ItemInspector: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("Audio") {
-                slider("Gain (dB)", item.gain.isAnimated ? 0 : item.gain.value(at: .zero), -40...12) { v in modify("Gain", key: "gain") { $0.gain = .constant(v) } }
+                keyed("Gain (dB)", -40...12, name: "Gain", key: "gain", { $0.gain }, { $0.gain = $1 })
                 slider("Fade in (s)", item.fadeIn.seconds, 0...3) { v in modify("Fade In", key: "fi") { $0.fadeIn = RationalTime(seconds: v) } }
                 slider("Fade out (s)", item.fadeOut.seconds, 0...3) { v in modify("Fade Out", key: "fo") { $0.fadeOut = RationalTime(seconds: v) } }
             }
@@ -109,6 +114,66 @@ private struct ItemInspector: View {
     nonisolated static func niceSpeed(_ v: Double) -> Double {
         let pct = (v * 100).rounded()
         return abs(pct - 100) < 3 ? 1 : pct / 100
+    }
+
+    /// The playhead in item time, or nil when it isn't over the item (keyframes go where the playhead is).
+    private var local: RationalTime? {
+        let t = editor.playhead - item.start
+        return t >= .zero && t <= item.range.duration ? t : nil
+    }
+
+    private var halfFrame: RationalTime { editor.timeline.canvas.frameRate.frameDuration * 0.5 }
+
+    /// A keyframeable number property.
+    private func keyed(_ label: String, _ range: ClosedRange<Double>, name: String, key: String,
+                       _ read: @escaping @Sendable (Item) -> Param<Double>, _ write: @escaping @Sendable (inout Item, Param<Double>) -> Void) -> some View {
+        keyed(label, range, name: name, key: key, read, write, get: { $0 }, set: { $1 })
+    }
+
+    /// A keyframeable property shown as one number (`get`/`set` pick a component, e.g. X of a position).
+    private func keyed<V: ClipperCore.Animatable>(_ label: String, _ range: ClosedRange<Double>, name: String, key: String,
+                                      _ read: @escaping @Sendable (Item) -> Param<V>, _ write: @escaping @Sendable (inout Item, Param<V>) -> Void,
+                                      get: @escaping @Sendable (V) -> Double, set: @escaping @Sendable (V, Double) -> V) -> some View {
+        let param = read(item), t = local, half = halfFrame
+        let here = t.flatMap { param.key(at: $0, tolerance: half) } != nil
+        let value = get(param.value(at: t ?? .zero))
+        let keys = param.keys.map(\.time)
+        return LabeledContent {
+            HStack(spacing: 4) {
+                if param.isAnimated {
+                    Button { if let k = keys.last(where: { $0 < (t ?? .zero) - half }) { editor.seek(to: item.start + k) } } label: { Image(systemName: "chevron.left") }
+                        .disabled(!keys.contains { $0 < (t ?? .zero) - half }).help("Previous keyframe")
+                }
+                Button {
+                    guard let t else { return }
+                    modify(here ? "Remove Keyframe" : "Add Keyframe") { item in
+                        let p = read(item)
+                        write(&item, here ? p.removingKey(at: t, tolerance: half) : p.setting(p.value(at: t), at: t, tolerance: half))
+                    }
+                } label: {
+                    Image(systemName: here ? "diamond.fill" : "diamond").foregroundStyle(param.isAnimated ? Color.accentColor : .secondary)
+                }
+                .disabled(t == nil)
+                .help(here ? "Remove the keyframe at the playhead" : "Add a keyframe at the playhead")
+                if param.isAnimated {
+                    Button { if let k = keys.first(where: { $0 > (t ?? .zero) + half }) { editor.seek(to: item.start + k) } } label: { Image(systemName: "chevron.right") }
+                        .disabled(!keys.contains { $0 > (t ?? .zero) + half }).help("Next keyframe")
+                }
+                Slider(value: Binding(get: { value }, set: { v in
+                    modify(name, key: key) { item in
+                        let p = read(item)
+                        if p.isAnimated, let t {
+                            write(&item, p.setting(set(p.value(at: t), v), at: t, tolerance: half))
+                        } else {
+                            write(&item, .constant(set(p.value(at: .zero), v)))
+                        }
+                    }
+                }), in: range) { editing in if !editing { editor.endGesture() } }
+                .disabled(param.isAnimated && t == nil)
+                Text(String(format: "%.2f", value)).font(.caption.monospacedDigit()).frame(width: 44, alignment: .trailing)
+            }
+            .buttonStyle(.borderless)
+        } label: { Text(label) }
     }
 
     private func slider(_ label: String, _ value: Double, _ range: ClosedRange<Double>, _ set: @escaping @MainActor (Double) -> Void) -> some View {
