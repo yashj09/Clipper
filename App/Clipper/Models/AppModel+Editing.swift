@@ -20,11 +20,25 @@ extension AppModel {
         }
     }
 
+    /// Whether the main window is free for editor actions: no sheet over it and no text being typed. Menu shortcuts reach
+    /// actions even when the key monitor stepped aside (text fields, sheets), so this is checked when they run.
+    var isMainWindowIdle: Bool {
+        guard let window = NSApp.keyWindow ?? keyMonitor.window else { return false }
+        return window.attachedSheet == nil && window.sheetParent == nil && !(window.firstResponder is NSText)
+    }
+
     func perform(_ action: EditorAction) {
+        // Typing in a text field: ⌘Z / ⇧⌘Z belong to the text, other editor shortcuts do nothing.
+        if action.group != .file, !isMainWindowIdle {
+            if NSApp.keyWindow?.firstResponder is NSText, action == .undo || action == .redo {
+                NSApp.sendAction(Selector((action == .undo ? "undo:" : "redo:")), to: nil, from: nil)
+            }
+            return
+        }
         switch action {
         case .importMedia: chooseAndImport()
         case .newDraft: draftSheet = []
-        case .export: if editor != nil { exportSheet = true }
+        case .export: if editor != nil, NSApp.keyWindow?.attachedSheet == nil { exportSheet = true }
         case .toggleSnapping:
             settings.editing.snapping.toggle()
             saveSettings()
@@ -144,6 +158,9 @@ extension AppModel {
     /// Re-drafts the open timeline, keeping the user's locked and added items (one undo step).
     func redraft(_ request: DraftRequest) async {
         guard let editor, let result = await makeDraft(request) else { return }
+        // The new draft may use assets the editor hasn't seen (newly picked music): register them before rendering.
+        for asset in result.addedAssets { editor.assets[asset.id] = asset }
+        for (id, asset) in allAssets where editor.assets[id] == nil { editor.assets[id] = asset }
         let merged = Redraft.merge(editor.timeline, into: result.timeline, context: editor.context)
         editor.perform(ReplaceTimeline(merged.timeline, name: "Re-draft"))
         let note = "Kept \(merged.kept) of your item\(merged.kept == 1 ? "" : "s") · ⌘Z goes back"

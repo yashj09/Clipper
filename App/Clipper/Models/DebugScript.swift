@@ -89,7 +89,7 @@ enum DebugScript {
             let parts = rest.split(separator: " ").map(String.init)
             guard parts.count == 3, parts[0] == "opacity", let t = Double(parts[1]), let v = Double(parts[2]),
                   let editor = model.editor, let id = editor.selection.first else { return log("bad keyframe") }
-            let half = editor.timeline.canvas.frameRate.frameDuration * 0.5
+            let half = RationalTime(seconds: editor.timeline.canvas.frameRate.frameDuration.seconds / 2)
             editor.perform(ModifyItem(id, name: "Add Keyframe") { $0.opacity = $0.opacity.setting(v, at: RationalTime(seconds: t), tolerance: half) })
         case "bind":
             // bind <action> <shortcut spec>: the same path as recording a shortcut in Settings.

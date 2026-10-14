@@ -60,6 +60,8 @@ public enum Redraft {
                 guard !keep.isEmpty else { continue }      // an automatic track the new draft no longer makes
                 var empty = track
                 empty.items = []
+                // Its ID may already belong to a track it was matched against by kind and name.
+                if t.trackIndex(track.id) != nil { empty.id = context.makeID() }
                 let i = t.insertionIndex(forNew: track.kind)
                 t.tracks.insert(empty, at: i)
                 ti = i
@@ -71,8 +73,10 @@ public enum Redraft {
             // A locked track comes back exactly as it was, without the new draft's items in its gaps.
             if track.locked { t.tracks[index].items = [] }
             for item in keep {
-                // Overwrite clears whatever new automatic item is in the way (splitting it if needed).
-                if let out = try? InsertItem(item, on: id, mode: .overwrite).apply(to: t, context: context) {
+                // Overwrite clears whatever new automatic item is in the way (splitting it if needed). If that would cut
+                // into another kept (locked) item, it goes on a free track of the same kind instead of being dropped.
+                if let out = (try? InsertItem(item, on: id, mode: .overwrite).apply(to: t, context: context))
+                    ?? (try? PlaceItems([.init(item, track: id, kinds: [track.kind])]).apply(to: t, context: context)) {
                     t = out
                     keptIDs.insert(item.id)
                     keptOn[item.id] = id

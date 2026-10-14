@@ -36,6 +36,7 @@ public struct KeyShortcut: Hashable, Sendable, CustomStringConvertible {
 
     /// Parses `"cmd+shift+k"`; nil for an unknown modifier, an empty key or a multi-character unnamed key.
     public init?(spec: String) {
+        if spec == "+" { self.init("+"); return }
         var parts = spec.split(separator: "+", omittingEmptySubsequences: false).map(String.init)
         // "cmd++" is ⌘ and the + key.
         if spec.hasSuffix("++") { parts.removeLast(2); parts.append("+") }

@@ -60,11 +60,14 @@ extension Timeline {
         let others = tracks[ti].items.filter { $0.id != item.id && $0.range.overlaps(item.range) }
         if !others.isEmpty {
             guard mode == .overwrite else { throw EditError.overlap(tracks[ti].id) }
+            // Locked items are never cut into, as with blade and trim.
+            if let locked = others.first(where: \.locked) { throw EditError.itemLocked(locked.id) }
             for o in others { try clear(item.range, onTrack: ti, item: o, context: context) }
         }
         tracks[ti].items.removeAll { $0.id == item.id }
         tracks[ti].items.append(item)
         tracks[ti].sortItems()
+        if !others.isEmpty { removeEmptyCaptions() }
     }
 
     /// Removes the part of `item` covered by `range`.
@@ -305,6 +308,7 @@ public struct Blade: EditCommand {
             did = true
         }
         guard did else { throw EditError.nothingToDo }
+        t.removeEmptyCaptions()
         return t
     }
 }

@@ -174,3 +174,64 @@ private func sec(_ s: Double) -> RationalTime { RationalTime(seconds: s) }
         }
     }
 }
+
+@Suite struct ReviewFixTests {
+    @Test func speedChangesAreStableAndStayInsideTheMedia() throws {
+        // A 301-frame clip using all of a 301-frame file (the case that used to run past the end at 1.5×).
+        let asset = UUID()
+        let fileLength = RationalTime(value: 301, scale: 30)
+        let clip = Item(name: "C", range: TimeRange(start: .zero, duration: fileLength),
+                        content: .media(MediaRef(asset: asset, source: TimeRange(start: .zero, duration: fileLength))))
+        var tl = Timeline(name: "T", canvas: .vertical1080, tracks: [Track(kind: .video, items: [clip])])
+        let context = EditContext(assetDurations: [asset: fileLength])
+        tl = try SetSpeed(clip.id, speed: 1.5, ripple: true).apply(to: tl, context: context)
+        #expect(tl.tracks[0].items[0].content.mediaRef!.source.end <= fileLength)
+        #expect(tl.validate(assetDurations: [asset: fileLength]).filter { $0.severity == .error }.isEmpty)
+        // A slider drag times every step from the source it started with, so wandering back to 100% restores it exactly.
+        let base = tl.tracks[0].items[0].content.mediaRef!.source
+        let before = tl.tracks[0].items[0].range
+        for s in [1.37, 0.81, 2.2, 0.55, 1.13, 1.5] { tl = try SetSpeed(clip.id, speed: s, ripple: true, from: base).apply(to: tl, context: context) }
+        #expect(tl.tracks[0].items[0].range == before && tl.tracks[0].items[0].content.mediaRef!.source == base)
+        // A single change and back (presets) is within a frame.
+        tl = try SetSpeed(clip.id, speed: 1.0, ripple: true).apply(to: tl, context: context)
+        #expect(abs((tl.tracks[0].items[0].range.duration - fileLength).seconds) <= 1.0 / 30 + 1e-9)
+        #expect(throws: EditError.nothingToDo) { try SetSpeed(clip.id, speed: 1.0, ripple: true).apply(to: tl, context: context) }
+    }
+
+    @Test func placeItemsTriesKindsInOrder() throws {
+        var tl = Timeline(name: "T", canvas: .vertical1080, tracks: [Track(kind: .audio), Track(kind: .music)])
+        let asset = UUID()
+        let song = Item(name: "Song", range: TimeRange(seconds: 0, 5), content: .media(MediaRef(asset: asset, source: TimeRange(seconds: 0, 5))))
+        tl = try PlaceItems([.init(song, kinds: [.music, .audio])]).apply(to: tl, context: ctx(asset))
+        #expect(tl.tracks[1].items.map(\.name) == ["Song"] && tl.tracks[0].items.isEmpty)
+    }
+
+    @Test func overwriteNeverCutsLockedItems() throws {
+        var (tl, asset, a, _, video, _) = makeTimeline()
+        tl.tracks[0].items[0].locked = true
+        let x = Item(name: "X", range: TimeRange(seconds: 3, 5), content: .solid(.black))
+        #expect(throws: EditError.itemLocked(a)) { try InsertItem(x, on: video, mode: .overwrite).apply(to: tl, context: ctx(asset)) }
+    }
+
+    @Test func plusKeyRoundTrips() {
+        let plus = KeyShortcut("+")
+        #expect(KeyShortcut(spec: plus.spec) == plus)
+        #expect(KeyShortcut(spec: "cmd++") == KeyShortcut("+", [.command]))
+    }
+}
+
+@Suite struct EmptyCaptionTests {
+    @Test func cutsBetweenWordsLeaveNoEmptyPages() throws {
+        let asset = UUID()
+        let words = [CaptionContent.Word(text: "a", start: .zero, end: RationalTime(seconds: 0.5)),
+                     CaptionContent.Word(text: "b", start: RationalTime(seconds: 2), end: RationalTime(seconds: 2.5))]
+        let page = Item(name: "P", range: TimeRange(seconds: 0, 3), content: .caption(CaptionContent(words: words, style: "s")))
+        let tl = Timeline(name: "T", canvas: .vertical1080, tracks: [Track(kind: .caption, items: [page])])
+        // Range [0.6, 1.9) holds no word: after removing it the two halves keep "a" and "b", and nothing is empty.
+        let out = try RemoveRange(TimeRange(seconds: 0.6, 1.9), ripple: true).apply(to: tl, context: ctx(asset))
+        #expect(out.tracks[0].items.count == 2)
+        // Splitting at 1.0 then 1.5 makes a wordless middle piece, which is dropped.
+        let split = try Blade(at: RationalTime(seconds: 1.5)).apply(to: Blade(at: RationalTime(seconds: 1)).apply(to: tl, context: ctx(asset)), context: ctx(asset))
+        #expect(split.tracks[0].items.allSatisfy { if case .caption(let c) = $0.content { !c.words.isEmpty } else { true } })
+    }
+}

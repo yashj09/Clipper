@@ -179,8 +179,7 @@ extension EditorModel {
     func deleteSelectionOrRange(ripple: Bool) {
         if !selection.isEmpty { return deleteSelection(ripple: ripple) }
         guard let range = markedRange else { return NSSound.beep() }
-        perform(RemoveRange(range, ripple: ripple))
-        guard lastError == nil else { return }
+        guard perform(RemoveRange(range, ripple: ripple)) else { return }
         inPoint = nil; outPoint = nil
         seek(to: range.start)
     }
@@ -192,10 +191,9 @@ extension EditorModel {
         var targets = selectedItems.filter { $0.start < p && p < $0.end }
         if targets.isEmpty, let item = clipAtPlayhead(), item.start < p { targets = [item] }
         guard !targets.isEmpty else { return NSSound.beep() }
-        lastError = nil
-        perform(Batch(targets.map { TrimItem($0.id, edge: edge, to: p, ripple: ripple) },
-                      name: edge == .start ? "Trim Start" : "Trim End"))
-        if edge == .start, ripple, lastError == nil, let first = targets.map(\.start).min() { seek(to: first) }
+        let ok = perform(Batch(targets.map { TrimItem($0.id, edge: edge, to: p, ripple: ripple) },
+                               name: edge == .start ? "Trim Start" : "Trim End"))
+        if ok, edge == .start, ripple, let first = targets.map(\.start).min() { seek(to: first) }
     }
 
     private func nudge(by delta: RationalTime) {
@@ -233,9 +231,7 @@ extension EditorModel {
             placed.append(item.id)
             return .init(item, track: e.track, kinds: e.kinds)
         }
-        lastError = nil
-        perform(PlaceItems(placements, name: name))
-        if lastError == nil { selection = Set(placed) }
+        if perform(PlaceItems(placements, name: name)) { selection = Set(placed) }
     }
 
     /// Copies of the selection right after it.
@@ -313,14 +309,13 @@ extension EditorModel {
         case (.overwrite, let t?):
             edit = InsertItem(item, on: t.id, mode: .overwrite)
         }
-        lastError = nil
-        perform(addable.prerequisites.isEmpty ? edit : Batch(addable.prerequisites + [edit], name: edit.name))
-        if lastError == nil, timeline.item(item.id) != nil { selection = [item.id] }
+        let ok = perform(addable.prerequisites.isEmpty ? edit : Batch(addable.prerequisites + [edit], name: edit.name))
+        if ok, timeline.item(item.id) != nil { selection = [item.id] }
     }
 
     // MARK: Speed
 
-    func setSpeed(_ id: ItemID, _ speed: Double) {
-        perform(SetSpeed(id, speed: speed, ripple: ripple))
+    func setSpeed(_ id: ItemID, _ speed: Double, from source: TimeRange? = nil) {
+        perform(SetSpeed(id, speed: speed, ripple: ripple, from: source))
     }
 }

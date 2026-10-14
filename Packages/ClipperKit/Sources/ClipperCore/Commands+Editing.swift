@@ -24,6 +24,16 @@ extension Timeline {
     }
 }
 
+extension Timeline {
+    /// Removes caption pages left without words by a cut (a split between words leaves one side empty; it would show
+    /// nothing but still clutter the track).
+    mutating func removeEmptyCaptions() {
+        for ti in tracks.indices where tracks[ti].kind == .caption {
+            tracks[ti].items.removeAll { if case .caption(let c) = $0.content { c.words.isEmpty } else { false } }
+        }
+    }
+}
+
 extension Item {
     /// Stretches item-relative keyframes by `factor` (a speed change makes the item longer or shorter).
     mutating func scaleKeyframes(by factor: Double) {
@@ -64,8 +74,9 @@ public struct PlaceItems: EditCommand {
             func fits(_ ti: Int) -> Bool {
                 p.kinds.contains(t.tracks[ti].kind) && !t.tracks[ti].locked && !t.tracks[ti].items.contains { $0.range.overlaps(p.item.range) }
             }
+            // Preferred track, then the kinds in order (music before audio, titles before overlays), then a new track.
             let ti = p.track.flatMap(t.trackIndex).flatMap { fits($0) ? $0 : nil }
-                ?? t.tracks.indices.first(where: fits)
+                ?? p.kinds.lazy.compactMap { kind in t.tracks.indices.first { t.tracks[$0].kind == kind && fits($0) } }.first
                 ?? t.addTrack(newKind, context: context)
             t.tracks[ti].items.append(p.item)
             t.tracks[ti].sortItems()
@@ -101,6 +112,7 @@ public struct InsertEdit: EditCommand {
             }
         }
         try t.place(item, onTrack: ti, mode: .reject, context: context)
+        t.removeEmptyCaptions()
         return t
     }
 }
@@ -131,6 +143,7 @@ public struct RemoveRange: EditCommand {
             t.tracks[ti].sortItems()
         }
         guard changed else { throw EditError.nothingToDo }
+        t.removeEmptyCaptions()
         return t
     }
 }
@@ -172,7 +185,12 @@ public struct SetSpeed: EditCommand {
     public var id: ItemID
     public var speed: Double
     public var ripple: Bool
-    public init(_ id: ItemID, speed: Double, ripple: Bool) { self.id = id; self.speed = speed; self.ripple = ripple }
+    /// The source range to time from: the clip's at the start of a slider drag, so every step of the drag is computed
+    /// from the same footage instead of compounding a frame of rounding per step. nil = the clip's current source.
+    public var from: TimeRange?
+    public init(_ id: ItemID, speed: Double, ripple: Bool, from: TimeRange? = nil) {
+        self.id = id; self.speed = speed; self.ripple = ripple; self.from = from
+    }
     public var name: String { "Change Speed" }
     public var coalescingKey: String? { "speed-\(id)" }
 
@@ -186,8 +204,14 @@ public struct SetSpeed: EditCommand {
         guard case .media(var m) = item.content else { throw EditError.invalidRange("only clips have a speed") }
         let rate = t.canvas.frameRate
         let old = item.range
-        // Whole frames, never longer than the source the clip already uses (so it can't run past the media's end).
-        let duration = (m.source.duration * (1 / speed)).floorToFrame(rate)
+        if let from { m.source = from }
+        guard speed != m.speed || from != nil else { throw EditError.nothingToDo }
+        // Whole frames, nearest to the source the clip uses now (so changing back and forth doesn't creep shorter);
+        // a frame less when the rounded length would run past the end of the media.
+        var duration = RationalTime(seconds: m.source.duration.seconds / speed).roundedToFrame(rate)
+        if let end = context.assetDurations[m.asset], m.source.start + duration.timesSpeed(speed) > end {
+            duration = RationalTime(seconds: (end - m.source.start).seconds / speed).floorToFrame(rate)
+        }
         guard duration >= rate.frameDuration else { throw EditError.invalidRange("clip would be shorter than a frame") }
         m.speed = speed
         m.source.duration = duration.timesSpeed(speed)

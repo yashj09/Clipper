@@ -20,9 +20,9 @@ struct ClipperApp: App {
                 actionButton(.export)
             }
             CommandGroup(replacing: .undoRedo) {
-                Button("Undo\(model.editor?.history.undoName.map { " " + $0 } ?? "")") { model.editor?.undo() }
+                Button("Undo\(model.editor?.history.undoName.map { " " + $0 } ?? "")") { model.perform(.undo) }
                     .shortcut(.undo, in: model.settings.keyBindings).disabled(model.editor?.history.canUndo != true)
-                Button("Redo\(model.editor?.history.redoName.map { " " + $0 } ?? "")") { model.editor?.redo() }
+                Button("Redo\(model.editor?.history.redoName.map { " " + $0 } ?? "")") { model.perform(.redo) }
                     .shortcut(.redo, in: model.settings.keyBindings).disabled(model.editor?.history.canRedo != true)
             }
             CommandMenu("Playback") {

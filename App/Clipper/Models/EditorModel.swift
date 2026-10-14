@@ -14,7 +14,8 @@ final class EditorModel {
     private(set) var project: Project
     var timelineIndex = 0
     private(set) var history = EditHistory()
-    var selection: Set<ItemID> = []
+    /// Changing the selection ends any run of merged edits (nudges, text typing), so the next one is its own undo step.
+    var selection: Set<ItemID> = [] { didSet { if selection != oldValue { history.breakCoalescing() } } }
     var playhead: RationalTime = .zero
     var lastError: String?
     /// In and Out marks (I / O). Transient: they aren't saved with the project.
@@ -61,18 +62,22 @@ final class EditorModel {
 
     // MARK: Editing
 
-    func perform(_ command: any EditCommand) {
+    /// Applies `command`; false (with `lastError` set and a beep) when it was refused.
+    @discardableResult
+    func perform(_ command: any EditCommand) -> Bool {
         var tl = timeline
         do {
             try history.perform(command, on: &tl, context: context)
         } catch {
             lastError = (error as? EditError)?.description ?? "\(error)"
             NSSound.beep()
-            return
+            return false
         }
+        lastError = nil
         timeline = tl
         selection = selection.filter { tl.item($0) != nil }
         changed()
+        return true
     }
 
     /// Finishes a continuous gesture (slider drag) so the next change becomes a new undo step.

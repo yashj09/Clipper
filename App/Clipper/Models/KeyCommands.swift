@@ -101,7 +101,7 @@ extension View {
 @MainActor
 final class KeyCommandMonitor {
     private var monitor: Any?
-    private weak var window: NSWindow?
+    private(set) weak var window: NSWindow?
     private weak var model: AppModel?
     /// Rebuilt only when the bindings change, not on every key press.
     private var cached: (bindings: KeyBindings, lookup: [KeyShortcut: EditorAction])?
@@ -123,7 +123,7 @@ final class KeyCommandMonitor {
     }
 
     private func handle(_ event: NSEvent) -> Bool {
-        guard let window, event.window === window, window.attachedSheet == nil, !event.isARepeat || Self.repeats(event),
+        guard let window, event.window === window, window.attachedSheet == nil,
               let model, let shortcut = KeyShortcut(event: event) else { return false }
         if let responder = window.firstResponder {
             if responder is NSText { return false }
@@ -134,12 +134,17 @@ final class KeyCommandMonitor {
         let bindings = model.settings.keyBindings
         if cached?.bindings != bindings { cached = (bindings, bindings.lookup) }
         guard let action = cached?.lookup[shortcut], model.canPerform(action) else { return false }
+        // A held key fires once (frame steps and nudges excepted). The repeats are swallowed here: passed on, they'd
+        // beep, or reach the menu, whose key equivalents do auto-repeat.
+        if event.isARepeat, !Self.repeats(action) { return true }
         model.perform(action)
         return true
     }
 
-    /// Held arrow keys keep stepping frames; other actions fire once per press.
-    private static func repeats(_ event: NSEvent) -> Bool { [123, 124].contains(event.keyCode) || event.characters == "," || event.characters == "." }
+    /// Actions that keep going while their key is held.
+    private static func repeats(_ action: EditorAction) -> Bool {
+        [.previousFrame, .nextFrame, .back10Frames, .forward10Frames, .nudgeLeft, .nudgeRight, .previousEdit, .nextEdit].contains(action)
+    }
 }
 
 /// Hands the hosting window to the key monitor (SwiftUI doesn't expose it directly).

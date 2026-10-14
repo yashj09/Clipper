@@ -22,6 +22,7 @@ struct InspectorView: View {
 private struct ItemInspector: View {
     @Bindable var editor: EditorModel
     let item: Item
+    @State private var speedBase: (id: ItemID, source: TimeRange)?
 
     private func modify(_ name: String, key: String? = nil, _ change: @escaping @Sendable (inout Item) -> Void) {
         editor.perform(ModifyItem(item.id, name: name, coalescingKey: key.map { "\(item.id)-\($0)" }, change))
@@ -86,8 +87,11 @@ private struct ItemInspector: View {
             Section("Speed") {
                 LabeledContent("Speed") {
                     HStack {
-                        Slider(value: Binding(get: { log2(ref.speed) }, set: { v in editor.setSpeed(item.id, Self.niceSpeed(pow(2, v))) }), in: -2...2) { editing in
-                            if !editing { editor.endGesture() }
+                        Slider(value: Binding(get: { log2(ref.speed) }, set: { v in
+                            editor.setSpeed(item.id, Self.niceSpeed(pow(2, v)), from: speedBase?.id == item.id ? speedBase?.source : nil)
+                        }), in: -2...2) { editing in
+                            // Every step of a drag is timed from the footage the clip had when the drag began.
+                            if editing { speedBase = (item.id, ref.source) } else { speedBase = nil; editor.endGesture() }
                         }
                         Text("\(Int((ref.speed * 100).rounded()))%").font(.caption.monospacedDigit()).frame(width: 44, alignment: .trailing)
                     }
@@ -122,7 +126,9 @@ private struct ItemInspector: View {
         return t >= .zero && t <= item.range.duration ? t : nil
     }
 
-    private var halfFrame: RationalTime { editor.timeline.canvas.frameRate.frameDuration * 0.5 }
+    /// Keys within half a frame of the playhead count as "here". In seconds: `frameDuration * 0.5` would round back up to
+    /// a whole frame at the rate's own timescale (1/30 × 0.5 → 1/30).
+    private var halfFrame: RationalTime { RationalTime(seconds: editor.timeline.canvas.frameRate.frameDuration.seconds / 2) }
 
     /// A keyframeable number property.
     private func keyed(_ label: String, _ range: ClosedRange<Double>, name: String, key: String,
