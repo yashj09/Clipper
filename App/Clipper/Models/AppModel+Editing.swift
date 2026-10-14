@@ -1,0 +1,117 @@
+import AppKit
+import ClipperAutomation
+import ClipperCore
+import Foundation
+
+/// Keyboard actions and the editor's browser: actions that need more than the open editor (file commands, settings
+/// toggles, adding library media) are handled here; the rest go to `EditorModel.run`.
+@MainActor
+extension AppModel {
+    var isEditing: Bool {
+        if case .project = section { return editor != nil }
+        return false
+    }
+
+    /// Whether `action` applies right now; the key monitor lets the key through otherwise.
+    func canPerform(_ action: EditorAction) -> Bool {
+        switch action.group {
+        case .file: action != .export || editor != nil
+        default: isEditing
+        }
+    }
+
+    func perform(_ action: EditorAction) {
+        switch action {
+        case .importMedia: chooseAndImport()
+        case .newDraft: draftSheet = []
+        case .export: if editor != nil { exportSheet = true }
+        case .toggleSnapping:
+            settings.editing.snapping.toggle()
+            saveSettings()
+        case .toggleRipple:
+            settings.editing.rippleByDefault.toggle()
+            saveSettings()
+        case .connectToTimeline: addBrowserSelection(.connect)
+        case .insertAtPlayhead: addBrowserSelection(.insert)
+        case .appendToStoryline: addBrowserSelection(.append)
+        case .overwriteAtPlayhead: addBrowserSelection(.overwrite)
+        default: editor?.run(action)
+        }
+    }
+
+    /// Q / W / E / D with whatever is selected in the editor's browser.
+    func addBrowserSelection(_ mode: AddMode) {
+        guard let editor, let item = editor.browserSelection else { return NSSound.beep() }
+        Task {
+            guard let addable = await addable(item, at: editor.playhead, in: editor) else { return NSSound.beep() }
+            editor.add(addable, mode: mode)
+        }
+    }
+
+    /// Drop from the browser (or the library grid) onto the timeline: onto a track at `time` — overwriting, or with ⌥
+    /// inserting — or below the tracks, which connects it on a free or new track.
+    func drop(_ item: BrowserItem, on track: TrackID?, at time: RationalTime, insert: Bool) {
+        guard let editor else { return }
+        Task {
+            guard let addable = await addable(item, at: time, in: editor) else { return NSSound.beep() }
+            editor.add(addable, mode: track == nil ? .connect : (insert ? .insert : .overwrite), track: track)
+        }
+    }
+
+    /// Length and accepted track kinds of a dragged item, for the timeline's drop preview.
+    func dropPreview(_ item: BrowserItem) -> (duration: RationalTime, kinds: [TrackKind])? {
+        guard let editor else { return nil }
+        let rate = editor.timeline.canvas.frameRate
+        switch item {
+        case .asset(let id):
+            guard let asset = assets.first(where: { $0.id == id }) ?? editor.assets[id] else { return nil }
+            return editor.clipItem(asset, at: .zero).map { ($0.item.range.duration, $0.kinds) }
+        case .music(let id):
+            guard let track = music.first(where: { $0.id == id }) else { return nil }
+            return (RationalTime(seconds: track.duration).floorToFrame(rate), [.music, .audio])
+        case .title:
+            return (RationalTime(seconds: 3).roundedToFrame(rate), [.title, .overlay])
+        }
+    }
+
+    /// Resolves a browser item to something addable. Music tracks become library assets on first use (with the same
+    /// stable IDs drafts use), so the project still opens next time.
+    private func addable(_ item: BrowserItem, at time: RationalTime, in editor: EditorModel) async -> AddableItem? {
+        switch item {
+        case .title(let style):
+            return editor.textItem(style: style, at: time)
+        case .asset(let id):
+            guard let asset = editor.assets[id] ?? assets.first(where: { $0.id == id }) else { return nil }
+            editor.assets[asset.id] = asset
+            return editor.clipItem(asset, at: time)
+        case .music(let id):
+            guard let track = music.first(where: { $0.id == id }) else { return nil }
+            let asset = DraftPipeline.musicAsset(track)
+            if editor.assets[asset.id] == nil, let library {
+                do { _ = try await library.importMedia([asset.url], mode: .reference) { _ in asset } } catch {
+                    alert = "Couldn't add \(track.title): \(error)"
+                    return nil
+                }
+            }
+            editor.assets[asset.id] = asset
+            var addable = editor.clipItem(asset, at: time)
+            // Credit CC-BY music like drafts do.
+            if let credit = track.license.attribution, !editor.timeline.attributions.contains(credit) {
+                addable?.prerequisites.append(AddAttribution(credit))
+            }
+            return addable
+        }
+    }
+}
+
+/// Adds a licence credit to the timeline (e.g. CC-BY music added by hand).
+struct AddAttribution: EditCommand {
+    var credit: String
+    init(_ credit: String) { self.credit = credit }
+    var name: String { "Add Credit" }
+    func apply(to timeline: Timeline, context: EditContext) throws -> Timeline {
+        var t = timeline
+        if !t.attributions.contains(credit) { t.attributions.append(credit) }
+        return t
+    }
+}

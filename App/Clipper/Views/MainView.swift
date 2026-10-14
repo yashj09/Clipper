@@ -53,6 +53,7 @@ struct MainView: View {
             Button("OK") { model.alert = nil }
         } message: { Text(model.alert ?? "") }
         .overlay { if let e = model.libraryError { Text(e).padding().background(.red.opacity(0.2)) } }
+        .background(KeyMonitorHost(monitor: model.keyMonitor))
     }
 }
 
@@ -265,17 +266,19 @@ struct TemplatesView: View {
 struct EditorView: View {
     @Bindable var model: AppModel
     @Bindable var editor: EditorModel
-    @State private var zoom: TimelineView.ZoomRequest? = .fit(UUID())
+    @AppStorage("showBrowser") private var showBrowser = true
 
     var body: some View {
         VSplitView {
             HSplitView {
+                if showBrowser { BrowserView(model: model, editor: editor).frame(minWidth: 200, idealWidth: 240, maxWidth: 340) }
                 ViewerView(editor: editor).frame(minWidth: 360, minHeight: 300)
                 InspectorView(editor: editor).frame(minWidth: 260, idealWidth: 300, maxWidth: 380)
             }
-            TimelineView(editor: editor, zoomRequest: zoom).frame(minHeight: 220, idealHeight: 320)
+            TimelineView(model: model, editor: editor).frame(minHeight: 220, idealHeight: 320)
         }
         .navigationTitle(editor.project.name)
+        .onChange(of: editor.timeline.id) { editor.inPoint = nil; editor.outPoint = nil }
         .toolbar {
             ToolbarItem(placement: .navigation) {
                 if editor.project.timelines.count > 1 {
@@ -285,22 +288,27 @@ struct EditorView: View {
                     .frame(maxWidth: 280)
                 }
             }
+            ToolbarItem(placement: .navigation) {
+                Toggle(isOn: $showBrowser) { Label("Browser", systemImage: "sidebar.squares.left") }.help("Show or hide the media browser")
+            }
             ToolbarItemGroup {
                 Button { editor.undo() } label: { Label("Undo", systemImage: "arrow.uturn.backward") }.disabled(!editor.history.canUndo)
                     .help(editor.history.undoName.map { "Undo \($0)" } ?? "Undo")
                 Button { editor.redo() } label: { Label("Redo", systemImage: "arrow.uturn.forward") }.disabled(!editor.history.canRedo)
-                Button { editor.bladeAtPlayhead() } label: { Label("Split", systemImage: "scissors") }.help("Split at playhead (B)")
-                Button { editor.deleteSelection(ripple: model.settings.editing.rippleByDefault) } label: { Label("Delete", systemImage: "trash") }
-                    .disabled(editor.selection.isEmpty)
+                Button { editor.bladeAtPlayhead() } label: { Label("Split", systemImage: "scissors") }.help(help(.blade))
+                Button { editor.addText() } label: { Label("Text", systemImage: "textformat") }.help(help(.addText))
+                Button { editor.run(.delete) } label: { Label("Delete", systemImage: "trash") }
+                    .disabled(editor.selection.isEmpty && editor.markedRange == nil)
+                    .help("Delete the selection, or the In–Out range when nothing is selected")
                 Toggle(isOn: Binding(get: { model.settings.editing.rippleByDefault }, set: { model.settings.editing.rippleByDefault = $0; model.saveSettings() })) {
                     Label("Ripple", systemImage: "arrow.left.and.right.righttriangle.left.righttriangle.right")
                 }.help("Ripple edits close gaps (hold ⌥ while trimming to invert)")
                 Toggle(isOn: Binding(get: { model.settings.editing.snapping }, set: { model.settings.editing.snapping = $0; model.saveSettings() })) {
                     Label("Snap", systemImage: "arrow.right.to.line")
                 }
-                Button { zoom = .zoomOut(UUID()) } label: { Label("Zoom Out", systemImage: "minus.magnifyingglass") }
-                Button { zoom = .fit(UUID()) } label: { Label("Fit", systemImage: "arrow.left.and.right") }
-                Button { zoom = .zoomIn(UUID()) } label: { Label("Zoom In", systemImage: "plus.magnifyingglass") }
+                Button { editor.run(.zoomOut) } label: { Label("Zoom Out", systemImage: "minus.magnifyingglass") }.help(help(.zoomOut))
+                Button { editor.run(.zoomToFit) } label: { Label("Fit", systemImage: "arrow.left.and.right") }.help(help(.zoomToFit))
+                Button { editor.run(.zoomIn) } label: { Label("Zoom In", systemImage: "plus.magnifyingglass") }.help(help(.zoomIn))
                 CaptionsMenu(editor: editor)
                 Button { model.saveTemplateSheet = true } label: { Label("Save as Template", systemImage: "rectangle.stack.badge.plus") }
                     .help("Save this layout, titles, captions and music settings as a reusable template")
@@ -312,6 +320,13 @@ struct EditorView: View {
     }
 }
 
+
+extension EditorView {
+    /// Tooltip naming the action and its current shortcut.
+    func help(_ action: EditorAction) -> String {
+        action.title + (model.settings.keyBindings.shortcuts(for: action).first.map { " (\($0.display))" } ?? "")
+    }
+}
 
 /// Translate captions on-device and pick which language is burned in.
 struct CaptionsMenu: View {

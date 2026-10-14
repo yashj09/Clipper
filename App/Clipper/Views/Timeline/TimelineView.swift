@@ -3,10 +3,8 @@ import SwiftUI
 
 /// SwiftUI wrapper: pushes model state into the AppKit canvas and turns its gestures into edit commands.
 struct TimelineView: NSViewRepresentable {
+    @Bindable var model: AppModel
     @Bindable var editor: EditorModel
-    var zoomRequest: ZoomRequest?
-
-    enum ZoomRequest: Equatable { case fit(UUID), zoomIn(UUID), zoomOut(UUID) }
 
     func makeNSView(context: Context) -> TimelineCanvas {
         let canvas = TimelineCanvas(frame: .zero)
@@ -16,6 +14,7 @@ struct TimelineView: NSViewRepresentable {
     }
 
     func updateNSView(_ canvas: TimelineCanvas, context: Context) {
+        context.coordinator.model = model
         context.coordinator.editor = editor
         canvas.assets = editor.assets
         canvas.snapping = editor.settings.editing.snapping
@@ -23,10 +22,12 @@ struct TimelineView: NSViewRepresentable {
         if canvas.timeline != editor.timeline { canvas.timeline = editor.timeline }
         canvas.selection = editor.selection
         canvas.playhead = editor.playhead
-        if zoomRequest != context.coordinator.lastZoom {
-            context.coordinator.lastZoom = zoomRequest
+        canvas.inPoint = editor.inPoint
+        canvas.outPoint = editor.outPoint
+        if editor.zoomRequest != context.coordinator.lastZoom {
+            context.coordinator.lastZoom = editor.zoomRequest
             let mid = canvas.bounds.midX
-            switch zoomRequest {
+            switch editor.zoomRequest {
             case .fit: canvas.zoomToFit()
             case .zoomIn: canvas.zoom(by: 1.5, around: mid)
             case .zoomOut: canvas.zoom(by: 1 / 1.5, around: mid)
@@ -35,12 +36,13 @@ struct TimelineView: NSViewRepresentable {
         }
     }
 
-    func makeCoordinator() -> Coordinator { Coordinator(editor: editor) }
+    func makeCoordinator() -> Coordinator { Coordinator(model: model, editor: editor) }
 
     @MainActor final class Coordinator: TimelineCanvasDelegate {
+        var model: AppModel
         var editor: EditorModel
         var lastZoom: ZoomRequest?
-        init(editor: EditorModel) { self.editor = editor }
+        init(model: AppModel, editor: EditorModel) { self.model = model; self.editor = editor }
 
         func timelineSelect(_ ids: Set<ItemID>) { editor.selection = ids }
         func timelineSeek(_ time: RationalTime) { editor.player.isPlaying ? editor.player.pause() : (); editor.seek(to: time) }
@@ -50,22 +52,17 @@ struct TimelineView: NSViewRepresentable {
         func timelineTrim(_ id: ItemID, edge: TrimEdge, to: RationalTime, ripple: Bool) {
             editor.perform(TrimItem(id, edge: edge, to: to, ripple: ripple))
         }
-        func timelineKey(_ action: TimelineCanvas.KeyAction) {
-            let player = editor.player
-            switch action {
-            case .playPause: editor.togglePlay()
-            case .stop: player.pause()
-            case .shuttleForward: player.player.rate = player.isPlaying && player.player.rate >= 1 ? min(player.player.rate * 2, 8) : 1; if !player.isPlaying { player.play() }
-            case .shuttleBack: player.pause(); editor.step(frames: -Int(editor.timeline.canvas.frameRate.fps))
-            case .stepBack: player.pause(); editor.step(frames: -1)
-            case .stepForward: player.pause(); editor.step(frames: 1)
-            case .blade: editor.bladeAtPlayhead()
-            case .delete: editor.deleteSelection(ripple: false)
-            case .rippleDelete: editor.deleteSelection(ripple: true)
-            case .home: editor.seek(to: .zero)
-            case .end: editor.seek(to: editor.timeline.duration)
-            case .zoomFit: break
-            }
+        func timelineAction(_ action: EditorAction) { model.perform(action) }
+        func timelineSetSpeed(_ id: ItemID, _ speed: Double) { editor.setSpeed(id, speed) }
+        func timelineShortcut(for action: EditorAction) -> KeyShortcut? { model.settings.keyBindings.shortcuts(for: action).first }
+
+        func timelineDropPreview(_ payload: String) -> (duration: RationalTime, kinds: [TrackKind])? {
+            BrowserItem(payload: payload).flatMap(model.dropPreview)
+        }
+
+        func timelineDrop(_ payload: String, track: TrackID?, at time: RationalTime, insert: Bool) {
+            guard let item = BrowserItem(payload: payload) else { return }
+            model.drop(item, on: track, at: time, insert: insert)
         }
 
         func timelineToggle(_ track: TrackID, _ property: TimelineCanvas.TrackToggle) {

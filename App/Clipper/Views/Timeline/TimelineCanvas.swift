@@ -11,13 +11,20 @@ protocol TimelineCanvasDelegate: AnyObject {
     func timelineMove(_ id: ItemID, toTrack: TrackID, start: RationalTime)
     func timelineTrim(_ id: ItemID, edge: TrimEdge, to: RationalTime, ripple: Bool)
     func timelineToggle(_ track: TrackID, _ property: TimelineCanvas.TrackToggle)
-    func timelineKey(_ action: TimelineCanvas.KeyAction)
+    /// An action chosen from the right-click menu.
+    func timelineAction(_ action: EditorAction)
+    func timelineSetSpeed(_ id: ItemID, _ speed: Double)
+    /// The shortcut shown next to an action in the right-click menu.
+    func timelineShortcut(for action: EditorAction) -> KeyShortcut?
+    /// Length and accepted track kinds of a dragged browser item (nil: not something the timeline accepts).
+    func timelineDropPreview(_ payload: String) -> (duration: RationalTime, kinds: [TrackKind])?
+    /// A drop onto `track` (nil: below the tracks, so it goes on a free or new track). ⌥ asks for an insert edit.
+    func timelineDrop(_ payload: String, track: TrackID?, at time: RationalTime, insert: Bool)
 }
 
 /// Pro-NLE timeline drawn with Core Animation (Phase 0 S4: virtualized layers + level of detail stay at 120 fps).
 final class TimelineCanvas: NSView {
     enum TrackToggle { case mute, hide, lock }
-    enum KeyAction { case playPause, shuttleBack, stop, shuttleForward, stepBack, stepForward, blade, delete, rippleDelete, home, end, zoomFit }
 
     // Layout
     static let rulerHeight: CGFloat = 26
@@ -33,6 +40,9 @@ final class TimelineCanvas: NSView {
     var assets: [AssetID: MediaAsset] = [:]
     var snapping = true
     var rippleByDefault = true
+    /// In / Out marks, drawn as a shaded range over the tracks and brackets on the ruler.
+    var inPoint: RationalTime? { didSet { if inPoint != oldValue { positionMarks() } } }
+    var outPoint: RationalTime? { didSet { if outPoint != oldValue { positionMarks() } } }
 
     /// Zoom (points per second) and horizontal scroll (seconds at the left edge).
     private(set) var pxPerSecond: CGFloat = 60
@@ -48,6 +58,7 @@ final class TimelineCanvas: NSView {
     private let summaryLayer = CALayer()
     private let playheadLayer = CALayer()
     private let ghostLayer = CALayer()
+    private let rangeLayer = CALayer()
     private var pool: [ItemLayer] = []
     private var active: [ItemID: ItemLayer] = [:]
     private let ruler = RulerView()
@@ -77,6 +88,13 @@ final class TimelineCanvas: NSView {
         ghostLayer.backgroundColor = NSColor.white.withAlphaComponent(0.12).cgColor
         ghostLayer.isHidden = true
         itemsLayer.addSublayer(ghostLayer)
+        rangeLayer.backgroundColor = NSColor.systemYellow.withAlphaComponent(0.08).cgColor
+        rangeLayer.borderColor = NSColor.systemYellow.withAlphaComponent(0.6).cgColor
+        rangeLayer.borderWidth = 1
+        rangeLayer.zPosition = 5
+        rangeLayer.isHidden = true
+        layer?.addSublayer(rangeLayer)
+        registerForDraggedTypes([.string])
         playheadLayer.backgroundColor = NSColor.systemRed.cgColor
         playheadLayer.zPosition = 10
         layer?.addSublayer(playheadLayer)
@@ -165,6 +183,7 @@ final class TimelineCanvas: NSView {
         }
         for (id, l) in active where !keep.contains(id) { l.removeFromSuperlayer(); pool.append(l); active[id] = nil }
         positionPlayhead()
+        positionMarks()
         ruler.needsDisplay = true
         headers.needsDisplay = true
     }
@@ -270,6 +289,26 @@ final class TimelineCanvas: NSView {
         let px = x(for: playhead.seconds)
         playheadLayer.frame = CGRect(x: px - 0.75, y: 0, width: 1.5, height: bounds.height)
         playheadLayer.isHidden = px < Self.headerWidth
+        CATransaction.commit()
+        ruler.needsDisplay = true
+    }
+
+    /// The marked range: In to Out, or to the end / from the start when only one is set.
+    var markedRange: (Double, Double)? {
+        guard inPoint != nil || outPoint != nil else { return nil }
+        let a = inPoint?.seconds ?? 0, b = outPoint?.seconds ?? (timeline?.duration.seconds ?? 0)
+        return a < b ? (a, b) : nil
+    }
+
+    private func positionMarks() {
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        if let (a, b) = markedRange {
+            let x0 = max(Self.headerWidth, x(for: a)), x1 = x(for: b)
+            rangeLayer.isHidden = x1 <= x0
+            rangeLayer.frame = CGRect(x: x0, y: Self.rulerHeight, width: max(0, x1 - x0), height: max(0, bounds.height - Self.rulerHeight))
+        } else {
+            rangeLayer.isHidden = true
+        }
         CATransaction.commit()
         ruler.needsDisplay = true
     }
@@ -424,27 +463,6 @@ final class TimelineCanvas: NSView {
         return max(0, best)
     }
 
-    /// NLE keys while the timeline has focus (kept off the menu so they don't steal keystrokes from text fields).
-    override func keyDown(with event: NSEvent) {
-        let shift = event.modifierFlags.contains(.shift)
-        let action: KeyAction? = switch (event.charactersIgnoringModifiers?.lowercased(), event.keyCode) {
-        case (" ", _): .playPause
-        case ("j", _): .shuttleBack
-        case ("k", _): .stop
-        case ("l", _): .shuttleForward
-        case ("b", _): .blade
-        case (_, 123): .stepBack          // ←
-        case (_, 124): .stepForward       // →
-        // ⌫ / ⌦ follow the "ripple by default" setting like trims and the toolbar; ⌥ inverts it, ⇧ always ripples.
-        case (_, 51), (_, 117): shift || rippleByDefault != event.modifierFlags.contains(.option) ? .rippleDelete : .delete
-        case (_, 115): .home
-        case (_, 119): .end
-        case ("\\", _): .zoomFit
-        default: nil
-        }
-        if action == .zoomFit { zoomToFit() } else if let action { delegate?.timelineKey(action) } else { super.keyDown(with: event) }
-    }
-
     override func scrollWheel(with event: NSEvent) {
         if event.modifierFlags.contains(.command) {
             zoom(by: pow(1.01, event.scrollingDeltaY), around: convert(event.locationInWindow, from: nil).x)
@@ -463,6 +481,97 @@ final class TimelineCanvas: NSView {
 
     override func magnify(with event: NSEvent) {
         zoom(by: 1 + event.magnification, around: convert(event.locationInWindow, from: nil).x)
+    }
+
+    // MARK: Drops from the browser
+
+    private var dropTarget: (track: TrackID?, time: RationalTime)?
+
+    private func payload(_ info: NSDraggingInfo) -> String? { info.draggingPasteboard.string(forType: .string) }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { draggingUpdated(sender) }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard let timeline, let payload = payload(sender), let preview = delegate?.timelineDropPreview(payload) else {
+            dropTarget = nil; ghostLayer.isHidden = true; return []
+        }
+        let p = convert(sender.draggingLocation, from: nil)
+        let length = preview.duration.seconds
+        let start = RationalTime(seconds: snap(max(0, time(at: p.x)), exclude: UUID(), alsoEnd: length)).roundedToFrame(timeline.canvas.frameRate)
+        let x0 = x(for: start.seconds), x1 = x(for: start.seconds + length)
+        if let r = row(at: p.y), preview.kinds.contains(r.track.kind), !r.track.locked {
+            dropTarget = (r.track.id, start)
+            showGhost(x0: x0, x1: x1, row: r)
+        } else {
+            // Below the tracks (or on one that can't take it): a new or free track, previewed under the last row.
+            dropTarget = (nil, start)
+            let y = (rows.last.map { $0.y + $0.height + Self.trackGap } ?? 4)
+            showGhost(x0: x0, x1: x1, row: Row(track: Track(kind: preview.kinds[0]), y: y, height: Self.height(for: preview.kinds[0])))
+        }
+        return .copy
+    }
+
+    override func draggingExited(_ sender: NSDraggingInfo?) {
+        dropTarget = nil
+        ghostLayer.isHidden = true
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        defer { dropTarget = nil; ghostLayer.isHidden = true }
+        guard let payload = payload(sender), let target = dropTarget else { return false }
+        delegate?.timelineDrop(payload, track: target.track, at: target.time, insert: NSEvent.modifierFlags.contains(.option))
+        window?.makeFirstResponder(self)
+        return true
+    }
+
+    // MARK: Right-click menu
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let p = convert(event.locationInWindow, from: nil)
+        guard let (item, _, _) = hit(p) else { return nil }
+        if !selection.contains(item.id) { delegate?.timelineSelect([item.id]) }
+        let menu = NSMenu()
+        func add(_ action: EditorAction, _ title: String? = nil) {
+            let mi = NSMenuItem(title: title ?? action.title, action: #selector(contextAction(_:)), keyEquivalent: "")
+            mi.target = self
+            mi.representedObject = action.rawValue
+            if let s = delegate?.timelineShortcut(for: action) {
+                (mi.keyEquivalent, mi.keyEquivalentModifierMask) = s.appKitKeyEquivalent
+            }
+            menu.addItem(mi)
+        }
+        add(.blade); add(.trimStartToPlayhead); add(.trimEndToPlayhead)
+        menu.addItem(.separator())
+        add(.cut); add(.copy); add(.duplicate)
+        add(.delete, "Delete"); add(.rippleDelete); add(.deleteLeavingGap)
+        menu.addItem(.separator())
+        add(.toggleLock, item.locked ? "Unlock" : "Lock")
+        add(.selectClipRange, "Mark Clip Range")
+        if item.content.mediaRef != nil {
+            let speed = NSMenu()
+            for (title, v) in [("25%", 0.25), ("50%", 0.5), ("75%", 0.75), ("Normal (100%)", 1), ("150%", 1.5), ("200%", 2), ("400%", 4)] {
+                let mi = NSMenuItem(title: title, action: #selector(contextSpeed(_:)), keyEquivalent: "")
+                mi.target = self
+                mi.representedObject = [item.id.uuidString, String(v)]
+                if item.content.mediaRef?.speed == v { mi.state = .on }
+                speed.addItem(mi)
+            }
+            let sm = NSMenuItem(title: "Speed", action: nil, keyEquivalent: "")
+            sm.submenu = speed
+            menu.addItem(.separator())
+            menu.addItem(sm)
+        }
+        return menu
+    }
+
+    @objc private func contextAction(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let action = EditorAction(rawValue: raw) else { return }
+        delegate?.timelineAction(action)
+    }
+
+    @objc private func contextSpeed(_ sender: NSMenuItem) {
+        guard let v = sender.representedObject as? [String], let id = UUID(uuidString: v[0]), let speed = Double(v[1]) else { return }
+        delegate?.timelineSetSpeed(id, speed)
     }
 
     override func resetCursorRects() {
@@ -607,6 +716,22 @@ final class RulerView: NSView {
                 }
             }
             t += step
+        }
+        // In–Out range: a band along the bottom with brackets at the marks.
+        if let (a, b) = canvas.markedRange {
+            let x0 = max(TimelineCanvas.headerWidth, canvas.x(for: a)), x1 = canvas.x(for: b)
+            if x1 > x0 {
+                NSColor.systemYellow.withAlphaComponent(0.35).setFill()
+                CGRect(x: x0, y: bounds.height - 4, width: x1 - x0, height: 4).fill()
+            }
+        }
+        NSColor.systemYellow.setFill()
+        for (mark, isIn) in [(canvas.inPoint, true), (canvas.outPoint, false)] {
+            guard let mark else { continue }
+            let x = canvas.x(for: mark.seconds)
+            guard x >= TimelineCanvas.headerWidth else { continue }
+            CGRect(x: x - 1, y: bounds.height - 16, width: 2, height: 16).fill()
+            CGRect(x: isIn ? x : x - 6, y: bounds.height - 16, width: 7, height: 2).fill()
         }
         // Playhead head.
         let px = canvas.x(for: canvas.playhead.seconds)

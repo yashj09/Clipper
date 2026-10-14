@@ -52,21 +52,34 @@ final class AppModel {
     var publishSheet = false
     var templateEdit: TemplateEditRequest?
 
+    /// Routes keyboard shortcuts in the main window (installed by MainView).
+    @ObservationIgnored lazy var keyMonitor = KeyCommandMonitor(model: self)
     @ObservationIgnored private let watcher = FolderWatcher()
     /// Watch-folder settings the watcher was last started with.
     @ObservationIgnored private var watching: ClipperSettings.Integrations?
 
+    /// The library to open: the default one, or in debug builds `CLIPPER_LIBRARY` (scripted tests use a scratch library).
+    static var libraryURL: URL {
+        #if DEBUG
+        if let path = ProcessInfo.processInfo.environment["CLIPPER_LIBRARY"] { return URL(fileURLWithPath: path) }
+        #endif
+        return Library.defaultURL
+    }
+
     init() {
         do {
-            let lib = try Library.openOrCreate(at: Library.defaultURL)
+            let lib = try Library.openOrCreate(at: Self.libraryURL)
             library = lib
             settings = (try? lib.settings()) ?? ClipperSettings()
             refresh()
             restartWatching()
             recoverInterruptedPosts()
         } catch {
-            libraryError = "Couldn't open the library at \(Library.defaultURL.path): \(error)"
+            libraryError = "Couldn't open the library at \(Self.libraryURL.path): \(error)"
         }
+        #if DEBUG
+        DebugScript.runIfRequested(self)
+        #endif
     }
 
     func refresh() {

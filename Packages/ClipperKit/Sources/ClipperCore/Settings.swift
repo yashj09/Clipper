@@ -100,6 +100,8 @@ public struct ClipperSettings: Codable, Sendable, Equatable {
     public var export = Export()
     public var music = Music()
     public var integrations = Integrations()
+    /// Keyboard shortcuts the user changed (everything else uses the factory shortcuts).
+    public var keyBindings = KeyBindings()
 
     public init() {}
 
@@ -111,6 +113,7 @@ public struct ClipperSettings: Codable, Sendable, Equatable {
         export = (try? c.decode(Export.self, forKey: .export)) ?? Export()
         music = (try? c.decode(Music.self, forKey: .music)) ?? Music()
         integrations = (try? c.decode(Integrations.self, forKey: .integrations)) ?? Integrations()
+        keyBindings = (try? c.decode(KeyBindings.self, forKey: .keyBindings)) ?? KeyBindings()
     }
 }
 

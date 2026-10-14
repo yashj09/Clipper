@@ -38,8 +38,18 @@ private struct ItemInspector: View {
         switch item.content {
         case .text(let t):
             Section("Text") {
-                TextField("Text", text: Binding(get: { t.text }, set: { v in modify("Edit Text", key: "text") { if case .text(var c) = $0.content { c.text = v; $0.content = .text(c) } } }))
+                TextField("Text", text: Binding(get: { t.text }, set: { v in modify("Edit Text", key: "text") { if case .text(var c) = $0.content { c.text = v; $0.content = .text(c) } } }),
+                          axis: .vertical)
+                    .lineLimit(1...5)
                 StylePicker(editor: editor, selection: t.style) { s in modify("Change Style") { if case .text(var c) = $0.content { c.style = s; $0.content = .text(c) } } }
+                LabeledContent("Position") {
+                    HStack(spacing: 4) {
+                        ForEach([("Top", 0.13), ("Middle", 0.5), ("Lower third", 0.72), ("Bottom", 0.86)], id: \.0) { name, y in
+                            Button(name) { modify("Move Text") { $0.transform.position = .constant(NormPoint(0.5, y)) } }
+                        }
+                    }
+                    .controlSize(.small)
+                }
             }
         case .caption(let c):
             Section("Caption") {
@@ -67,13 +77,38 @@ private struct ItemInspector: View {
                 }
             }
         }
-        if item.content.mediaRef != nil {
+        if let ref = item.content.mediaRef {
+            Section("Speed") {
+                LabeledContent("Speed") {
+                    HStack {
+                        Slider(value: Binding(get: { log2(ref.speed) }, set: { v in editor.setSpeed(item.id, Self.niceSpeed(pow(2, v))) }), in: -2...2) { editing in
+                            if !editing { editor.endGesture() }
+                        }
+                        Text("\(Int((ref.speed * 100).rounded()))%").font(.caption.monospacedDigit()).frame(width: 44, alignment: .trailing)
+                    }
+                }
+                HStack(spacing: 4) {
+                    ForEach([0.5, 1, 1.5, 2], id: \.self) { v in
+                        Button(v == 1 ? "Normal" : "\(Int(v * 100))%") { editor.setSpeed(item.id, v); editor.endGesture() }
+                    }
+                }
+                .controlSize(.small)
+                Text(editor.settings.editing.rippleByDefault ? "Clips after this one move to make room (ripple is on)."
+                                                            : "With ripple off, a slower clip can't grow into the next one.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             Section("Audio") {
                 slider("Gain (dB)", item.gain.isAnimated ? 0 : item.gain.value(at: .zero), -40...12) { v in modify("Gain", key: "gain") { $0.gain = .constant(v) } }
                 slider("Fade in (s)", item.fadeIn.seconds, 0...3) { v in modify("Fade In", key: "fi") { $0.fadeIn = RationalTime(seconds: v) } }
                 slider("Fade out (s)", item.fadeOut.seconds, 0...3) { v in modify("Fade Out", key: "fo") { $0.fadeOut = RationalTime(seconds: v) } }
             }
         }
+    }
+
+    /// Slider speeds snap to whole percentages (and exactly 100%) so the label and the clip agree.
+    nonisolated static func niceSpeed(_ v: Double) -> Double {
+        let pct = (v * 100).rounded()
+        return abs(pct - 100) < 3 ? 1 : pct / 100
     }
 
     private func slider(_ label: String, _ value: Double, _ range: ClosedRange<Double>, _ set: @escaping @MainActor (Double) -> Void) -> some View {
@@ -125,7 +160,7 @@ private struct TimelineInspector: View {
             }
         }
         Section {
-            Text("Select an item to edit it. B splits at the playhead, ⌫ deletes, ⇧⌫ ripple-deletes, ⌥-drag a trim handle toggles ripple.")
+            Text("Select an item to edit it. Drag clips, music and titles from the browser onto the timeline (hold ⌥ to insert instead of overwrite). I / O mark a range that ⌫ removes. Right-click a clip for speed and more. Shortcuts are in Settings ▸ Shortcuts.")
                 .font(.caption).foregroundStyle(.secondary)
         }
     }

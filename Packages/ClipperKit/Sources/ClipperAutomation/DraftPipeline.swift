@@ -309,7 +309,7 @@ public enum DraftPipeline {
     }
 
     /// A media asset for a music track, with a stable ID derived from the track's ID.
-    static func musicAsset(_ t: MusicTrack) -> MediaAsset {
+    public static func musicAsset(_ t: MusicTrack) -> MediaAsset {
         var g = IDGenerator(seed: stableHash("music|\(t.id)"))
         return MediaAsset(id: g.uuid(), key: AssetKey("music-\(t.id)"), name: t.title, url: t.url,
                           info: MediaInfo(kind: .audio, duration: RationalTime(seconds: t.duration), audioChannels: 2, audioSampleRate: 44_100),

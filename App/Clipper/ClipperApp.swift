@@ -1,3 +1,4 @@
+import ClipperCore
 import SwiftUI
 
 @main
@@ -14,27 +15,47 @@ struct ClipperApp: App {
         .windowToolbarStyle(.unified)
         .commands {
             CommandGroup(after: .newItem) {
-                Button("Import Media…") { model.chooseAndImport() }.keyboardShortcut("i", modifiers: [.command])
-                Button("New Draft…") { model.draftSheet = [] }.keyboardShortcut("n", modifiers: [.command, .shift])
-                Button("Export…") { model.exportSheet = true }.keyboardShortcut("e", modifiers: [.command]).disabled(model.editor == nil)
+                actionButton(.importMedia)
+                actionButton(.newDraft)
+                actionButton(.export)
             }
             CommandGroup(replacing: .undoRedo) {
                 Button("Undo\(model.editor?.history.undoName.map { " " + $0 } ?? "")") { model.editor?.undo() }
-                    .keyboardShortcut("z", modifiers: [.command]).disabled(model.editor?.history.canUndo != true)
+                    .shortcut(.undo, in: model.settings.keyBindings).disabled(model.editor?.history.canUndo != true)
                 Button("Redo\(model.editor?.history.redoName.map { " " + $0 } ?? "")") { model.editor?.redo() }
-                    .keyboardShortcut("z", modifiers: [.command, .shift]).disabled(model.editor?.history.canRedo != true)
+                    .shortcut(.redo, in: model.settings.keyBindings).disabled(model.editor?.history.canRedo != true)
+            }
+            CommandMenu("Playback") {
+                ForEach(Self.menuActions(.playback), id: \.self) { actionButton($0) }
             }
             CommandMenu("Timeline") {
-                Button("Split at Playhead") { model.editor?.bladeAtPlayhead() }.keyboardShortcut("k", modifiers: [.command])
-                Button("Ripple Delete") { model.editor?.deleteSelection(ripple: true) }.keyboardShortcut(.delete, modifiers: [.shift])
-                Button("Lock/Unlock Selection") { model.editor?.toggleLock() }.keyboardShortcut("l", modifiers: [.command])
+                ForEach(Self.menuActions(.editing), id: \.self) { actionButton($0) }
                 Divider()
-                Button("Play/Pause") { model.editor?.togglePlay() }.keyboardShortcut("p", modifiers: [.command])
+                ForEach(Self.menuActions(.marking), id: \.self) { actionButton($0) }
+                Divider()
+                ForEach(Self.menuActions(.adding), id: \.self) { actionButton($0) }
+                Divider()
+                ForEach(Self.menuActions(.view), id: \.self) { actionButton($0) }
             }
         }
         Settings {
             SettingsView(model: model)
         }
+    }
+}
+
+extension ClipperApp {
+    /// Menu items for an action group. Clipboard and selection actions stay off menus: the standard Edit menu owns
+    /// ⌘C/⌘V/⌘A for text fields, and the key monitor handles them on the timeline.
+    static func menuActions(_ group: EditorAction.Group) -> [EditorAction] {
+        let offMenu: Set<EditorAction> = [.cut, .copy, .paste, .selectAll, .deselectAll, .undo, .redo]
+        return EditorAction.allCases.filter { $0.group == group && !offMenu.contains($0) }
+    }
+
+    func actionButton(_ action: EditorAction) -> some View {
+        Button(action.title) { model.perform(action) }
+            .shortcut(action, in: model.settings.keyBindings)
+            .disabled(!model.canPerform(action))
     }
 }
 
