@@ -43,8 +43,6 @@ public struct FaceAnalyzer: Sendable {
 
     private func decodeAndDetect(url: URL, info: MediaInfo, range: ClosedRange<Double>?,
                                  progress: (@Sendable (Double) -> Void)?) async throws -> FaceTrack {
-        let orientation = Self.orientation(rotation: info.rotation, mirrored: info.mirrored)
-
         let asset = AVURLAsset(url: url)
         guard let track = try await asset.loadTracks(withMediaType: .video).first else { throw FaceAnalysisError.noVideoTrack(url) }
         let reader: AVAssetReader
@@ -69,31 +67,56 @@ public struct FaceAnalyzer: Sendable {
         }
         defer { if reader.status == .reading { reader.cancelReading() } }
 
-        let interval = 1 / max(0.01, samplesPerSecond)
-        var nextSample = -Double.infinity
-        var samples: [FaceSample] = []
-        let request = DetectFaceRectanglesRequest()
+        var sampler = Sampler(self, info: info)
         while let buffer = output.copyNextSampleBuffer() {
             if Task.isCancelled { reader.cancelReading(); throw CancellationError() }
             let pts = CMSampleBufferGetPresentationTimeStamp(buffer)
             guard pts.isNumeric, let pixels = CMSampleBufferGetImageBuffer(buffer) else { continue }
             let t = pts.seconds
-            // Allow half a frame of slack so e.g. 30 fps sampled at 4/s does not drift onto every 8th frame.
-            guard t >= nextSample - (info.frameRate > 0 ? 0.5 / info.frameRate : 0) else { continue }
-            nextSample = (nextSample.isFinite ? nextSample : t) + interval
-            if nextSample < t { nextSample = t + interval }
-
-            let faces = try await request.perform(on: pixels, orientation: orientation)
-            if let best = Self.largest(faces, minConfidence: minConfidence) {
-                samples.append(FaceSample(time: t, rect: best.rect, confidence: best.confidence))
-            }
+            guard sampler.wants(t) else { continue }
+            try await sampler.detect(pixels, at: t)
             if let progress, hi > lo { progress(min(1, max(0, (t - lo) / (hi - lo)))) }
         }
         if reader.status == .failed {
             throw FaceAnalysisError.cannotRead(url, reader.error?.localizedDescription ?? "reader failed")
         }
         progress?(1)
-        return FaceTrack(samples: samples)
+        return FaceTrack(samples: sampler.samples)
+    }
+
+    /// Picks frames at `samplesPerSecond` from a decoded stream (presentation order) and detects their faces.
+    /// Shared by `analyze` and the shared video ingest, so both sample the same frames.
+    struct Sampler {
+        let interval: Double
+        let slack: Double
+        let orientation: CGImagePropertyOrientation
+        let minConfidence: Double
+        let request = DetectFaceRectanglesRequest()
+        private var nextSample = -Double.infinity
+        private(set) var samples: [FaceSample] = []
+
+        init(_ analyzer: FaceAnalyzer, info: MediaInfo) {
+            interval = 1 / max(0.01, analyzer.samplesPerSecond)
+            // Half a frame of slack so e.g. 30 fps sampled at 4/s does not drift onto every 8th frame.
+            slack = info.frameRate > 0 ? 0.5 / info.frameRate : 0
+            orientation = FaceAnalyzer.orientation(rotation: info.rotation, mirrored: info.mirrored)
+            minConfidence = analyzer.minConfidence
+        }
+
+        /// Whether the frame at `t` is a sample; if so, the next one is due `interval` later.
+        mutating func wants(_ t: Double) -> Bool {
+            guard t >= nextSample - slack else { return false }
+            nextSample = (nextSample.isFinite ? nextSample : t) + interval
+            if nextSample < t { nextSample = t + interval }
+            return true
+        }
+
+        mutating func detect(_ pixels: CVPixelBuffer, at t: Double) async throws {
+            let faces = try await request.perform(on: pixels, orientation: orientation)
+            if let best = FaceAnalyzer.largest(faces, minConfidence: minConfidence) {
+                samples.append(FaceSample(time: t, rect: best.rect, confidence: best.confidence))
+            }
+        }
     }
 
     private func analyzeImage(url: URL) async throws -> FaceTrack {

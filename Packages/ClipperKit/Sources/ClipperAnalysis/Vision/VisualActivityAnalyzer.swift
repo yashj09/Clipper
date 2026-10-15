@@ -68,13 +68,7 @@ public struct VisualActivityAnalyzer: Sendable {
         guard try await !asset.loadTracks(withMediaType: .video).isEmpty else { throw VisualAnalysisError.noVideoTrack(url) }
         var duration = info.duration.seconds
         if !(duration > 0) { duration = try await asset.load(.duration).seconds }
-        let lo = max(0, range?.lowerBound ?? 0)
-        let hi = min(range?.upperBound ?? duration, duration)
-        let step = max(0.05, interval)
-        var times: [Double] = []
-        var t = lo
-        while t < hi - 1e-3 { times.append(t); t = lo + Double(times.count) * step }
-        if times.isEmpty { times = [min(lo, max(0, duration - 1e-3))] }
+        let times = sampleTimes(duration: duration, range: range)
 
         let parts = max(1, min(concurrency, times.count / 16))
         let per = (times.count + parts - 1) / parts
@@ -95,11 +89,27 @@ public struct VisualActivityAnalyzer: Sendable {
             return out.compactMap { $0 }
         }
 
-        // Stitch segments: the first sample of each segment is compared with the last of the one before.
+        return try assemble(results, url: url, progress: progress)
+    }
+
+    /// The requested sample times: every `interval` from the start of `range` (or 0), at least one.
+    func sampleTimes(duration: Double, range: ClosedRange<Double>?) -> [Double] {
+        let lo = max(0, range?.lowerBound ?? 0)
+        let hi = min(range?.upperBound ?? duration, duration)
+        let step = max(0.05, interval)
+        var times: [Double] = []
+        var t = lo
+        while t < hi - 1e-3 { times.append(t); t = lo + Double(times.count) * step }
+        if times.isEmpty { times = [min(lo, max(0, duration - 1e-3))] }
+        return times
+    }
+
+    /// Stitches segments (the first sample of each is compared with the last of the one before) and finds the cuts.
+    func assemble(_ segments: [Segment], url: URL, progress: (@Sendable (Double) -> Void)?) throws -> VisualActivity {
         var samples: [VisualSample] = []
         var previous: Signature?
         var firstError: String?
-        for segment in results {
+        for segment in segments {
             firstError = firstError ?? segment.error
             for (k, var sample) in segment.samples.enumerated() {
                 if let last = samples.last, sample.time <= last.time + 1e-3 { continue }
@@ -113,41 +123,55 @@ public struct VisualActivityAnalyzer: Sendable {
         return VisualActivity(samples: samples, sceneCuts: sceneCuts(samples))
     }
 
-    private struct Segment: Sendable {
+    struct Segment: Sendable {
         var samples: [VisualSample] = []
         var first: Signature?
         var last: Signature?
         var error: String?
     }
 
+    /// Fingerprints and (optionally) saliency-scans sampled images in time order: the per-image work shared by the
+    /// image-generator path and the shared video ingest.
+    struct SegmentBuilder {
+        let saliency: Bool
+        let request = GenerateAttentionBasedSaliencyImageRequest()
+        private(set) var segment = Segment()
+
+        init(saliency: Bool) { self.saliency = saliency }
+
+        mutating func add(_ image: CGImage, at time: Double) async throws {
+            if let last = segment.samples.last, time <= last.time + 1e-3 { return }   // same frame again
+            guard let signature = Signature(image) else { return }
+            var salient: NormRect?
+            if saliency {
+                let observation = try await request.perform(on: image)
+                salient = VisualActivityAnalyzer.union(observation.salientObjects.map(\.boundingBox.cgRect))
+            }
+            let change = segment.last.map { VisualActivityAnalyzer.change($0, signature) } ?? 0
+            segment.samples.append(VisualSample(time: time, change: change, salient: salient))
+            if segment.first == nil { segment.first = signature }
+            segment.last = signature
+        }
+
+        mutating func fail(_ message: String) { segment.error = segment.error ?? message }
+    }
+
     /// Generates, fingerprints and (optionally) saliency-scans the frames at `times`, in order.
     private func sample(asset: AVURLAsset, times: [Double], tick: @Sendable () -> Void) async throws -> Segment {
         let generator = Self.makeGenerator(asset: asset, maximumSize: maximumSize, tolerance: tolerance)
         defer { generator.cancelAllCGImageGeneration() }
-        let request = GenerateAttentionBasedSaliencyImageRequest()
-        var segment = Segment()
+        var builder = SegmentBuilder(saliency: saliency)
         for await result in generator.images(for: times.map { CMTime(seconds: $0, preferredTimescale: 600) }) {
             try Task.checkCancellation()
             defer { tick() }
             switch result {
             case .success(requestedTime: _, image: let image, actualTime: let actual):
-                let time = actual.isNumeric ? actual.seconds : 0
-                if let last = segment.samples.last, time <= last.time + 1e-3 { continue }   // same frame again
-                guard let signature = Signature(image) else { continue }
-                var salient: NormRect?
-                if saliency {
-                    let observation = try await request.perform(on: image)
-                    salient = Self.union(observation.salientObjects.map(\.boundingBox.cgRect))
-                }
-                let change = segment.last.map { Self.change($0, signature) } ?? 0
-                segment.samples.append(VisualSample(time: time, change: change, salient: salient))
-                if segment.first == nil { segment.first = signature }
-                segment.last = signature
+                try await builder.add(image, at: actual.isNumeric ? actual.seconds : 0)
             case .failure(requestedTime: _, error: let error):
-                segment.error = segment.error ?? error.localizedDescription
+                builder.fail(error.localizedDescription)
             }
         }
-        return segment
+        return builder.segment
     }
 
     private func analyzeImage(url: URL, progress: (@Sendable (Double) -> Void)?) async throws -> VisualActivity {
