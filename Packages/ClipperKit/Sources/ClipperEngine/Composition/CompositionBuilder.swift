@@ -73,7 +73,9 @@ public enum CompositionBuilder {
             for item in track.items {
                 guard case .media(let ref) = item.content else { continue }
                 guard let asset = assets[ref.asset] else { throw BuildError.missingAsset(ref.asset) }
-                let url = (options.useProxies ? asset.proxyURL : nil) ?? asset.renderURL
+                // A proxy whose file has gone (deleted, library moved) falls back to the original.
+                let proxy = options.useProxies ? asset.proxyURL.flatMap { FileManager.default.fileExists(atPath: $0.path) ? $0 : nil } : nil
+                let url = proxy ?? asset.renderURL
                 let src = try await loader.tracks(url)
                 let sourceRange = ref.source.cmTimeRange
                 let at = item.start.cmTime

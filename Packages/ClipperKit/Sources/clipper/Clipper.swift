@@ -9,7 +9,7 @@ struct Clipper: AsyncParsableCommand {
         commandName: "clipper",
         abstract: "Local automatic video editor: import clips, draft a video from a template, export.",
         subcommands: [Draft.self, Highlights.self, Watch.self, Captions.self, Publish.self, Interchange.self, Import.self, Analyze.self, Export.self, Projects.self, Templates.self, MusicCommand.self,
-                      Presets.self, Info.self])
+                      Proxy.self, Presets.self, Info.self])
 }
 
 /// Options shared by every subcommand.

@@ -16,6 +16,15 @@ public struct ClipperSettings: Codable, Sendable, Equatable {
         /// Preview resolution relative to the canvas (1 = full).
         public var previewScale = 0.5
         public var useProxies = true
+        /// Which media get a proxy made after import.
+        public enum ProxyPolicy: String, Codable, Sendable, CaseIterable {
+            /// Sources beyond 1080p, ProRes and recordings over 20 minutes (`ProxyGenerator.wantsProxy`).
+            case automatic
+            /// Every video larger than a proxy.
+            case always
+            case never
+        }
+        public var proxyPolicy = ProxyPolicy.automatic
         public init() {}
         public init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self), d = Editing()
@@ -23,6 +32,7 @@ public struct ClipperSettings: Codable, Sendable, Equatable {
             snapping = c.value(.snapping, d.snapping)
             previewScale = c.value(.previewScale, d.previewScale)
             useProxies = c.value(.useProxies, d.useProxies)
+            proxyPolicy = c.value(.proxyPolicy, d.proxyPolicy)
         }
     }
 
