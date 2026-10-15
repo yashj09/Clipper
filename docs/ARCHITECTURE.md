@@ -56,13 +56,14 @@ enum Rule       { maxDuration, silenceCut, cutOnBeats, punchIn, reframe, duck, c
    - The shader tone-maps HDR with fitted luminance curves, then applies transform, crop and blend. Output buffers are tagged Rec.709.
    - Text is rendered with Core Text into a cached texture (per line and highlighted word) and animated with shader uniforms.
 4. **Preview**: `AVPlayer` + `AVPlayerItem(videoComposition:)`. Rebuilds are debounced. Seeks use zero tolerance while paused.
-5. **Export**: `AVAssetReaderVideoCompositionOutput` + `AVAssetReaderAudioMixOutput`, then a DSP stage (gain and true-peak limiter for the loudness target), then `AVAssetWriter`. Supports H.264, HEVC, HEVC with alpha, ProRes 422 and ProRes 4444.
-6. **Variable frame rate**: the compositor pulls frames on the sequence's fixed frame interval. Proxies are written at a constant frame rate.
-7. **Proxies are optional.** Frame-accurate seeks on 1080p60 HEVC originals take about 28 ms on an M4 Pro.
-   - Created only for 4K, 10-bit HDR, or heavy multi-layer sequences.
-   - Format: HEVC 720p, a keyframe every 0.5 s, no B-frames.
-   - Generation is limited by **decoding** (about 400 fps for 1080p HEVC).
-8. **One decode per source at ingest.** A single decode pass feeds thumbnails, waveform peaks, scene and face detection, and the proxy writer. Each analyzer doesn't re-decode.
+5. **Export**: `AVAssetReaderVideoCompositionOutput` + `AVAssetReaderAudioMixOutput`, then a DSP stage (gain and true-peak limiter for the loudness target), then `AVAssetWriter`. With a loudness target the composition is built once: the measuring pass captures the mixed PCM to a temporary CAF that the render pass streams back through the stage, so the audio is decoded and mixed once. Supports H.264, HEVC, HEVC with alpha, ProRes 422 and ProRes 4444.
+6. **Variable frame rate**: the compositor pulls frames on the sequence's fixed frame interval. Proxies keep the original's sample timing (VFR stays VFR), so source times map identically.
+7. **Proxies are optional** (`ProxyGenerator`). Frame-accurate seeks on 1080p60 HEVC originals take about 28 ms on an M4 Pro; on a proxy about 4 ms.
+   - Made automatically for sources beyond 1080p, ProRes, and recordings over 20 minutes (`editing.proxyPolicy`: automatic / always / never), in the background after import and on launch.
+   - Format: HEVC with a 720 px short side, a keyframe every second, no B-frames. Audio is copied untouched.
+   - The original's preferred transform and colour tags are kept: the compositor keeps using the *original* asset's `MediaInfo` (rotation, transfer), so an HDR proxy stays 10-bit BT.2020 and an untagged source gets an untagged proxy (it then decodes with the same inferred matrix).
+   - Generation is limited by **decoding**: 6.5× realtime for 1080p60 HEVC (30 min in 4.6 min). Stored in `Proxies/<assetKey>/proxy.mov`. A missing proxy file falls back to the original.
+8. **One audio decode per source at analysis** (`AudioIngest`). Speech envelope, transcript (`PCMStreamTranscriber`), loudness and sound events share one native-rate decode; the 16 kHz branch uses `StreamingResampler` (bit-identical to `Resampler`). Cached kinds are resolved first, so only misses decode. Faces and visual activity keep their own video decodes: no workflow requests both (drafts want faces, highlights want visual activity). Measured: 30-min VOD highlights set 36.9 s → 31.2 s cold; the transcriber is the long pole.
 9. **One hardware-encode scheduler.** All VideoToolbox encodes (exports, proxies, mezzanines) go through one queue, and exports jump ahead of queued background jobs (a background encode already running finishes first; it does not pause mid-way). Two concurrent HEVC sessions on the M4 Pro slow the foreground job by about 35×.
 10. **Import fallback**: if AVFoundation can't play a file, FFmpeg transcodes it once to a 10-bit HEVC mezzanine file.
 
@@ -126,3 +127,10 @@ Ingest → probe → mezzanine/proxy → analysis jobs (transcript, speechActivi
   - The result is a hidden `Captions (<lang>)` track placed after the source. IDs are derived from the source ID and the language, so re-running replaces the track.
   - Chinese, Japanese and Thai are cut into short phrases at punctuation and `NLTokenizer` word boundaries, and sidecars join them without spaces.
   - Right-to-left pages are laid out right to left by `TextRenderer`.
+
+## Manual editing and keyboard shortcuts
+
+- **Edit commands** are pure `(Timeline) -> Timeline` functions in ClipperCore (`Commands.swift`, `Commands+Editing.swift`): insert/overwrite, connect (`PlaceItems`: a free track, else a new one, never disturbing anything), insert edit (`InsertEdit`: a gap on every unlocked track so everything stays in sync), lift/extract (`RemoveRange`), nudge, speed (`SetSpeed`), `Batch` (one undo step). Locked items are never cut into; cuts keep each caption word on one side and drop wordless caption pieces.
+- **Keyboard**: `EditorAction` lists every action with factory shortcuts; `KeyBindings` stores only the user's changes in `settings.json` (`keyBindings`). In the app a local `NSEvent` monitor routes key presses in the main window to actions (stepping aside while typing in a text field, under a sheet, or in another window); only ⌘/⌃ shortcuts go on menus, because a plain-key menu equivalent would fire before a text field could type it. Settings ▸ Shortcuts records, removes and resets bindings.
+- **Re-draft**: `Provenance.inputs` records the draft's clips and options; `Redraft.merge` lays the user's locked/added items and locked tracks over a fresh draft. One undo step.
+- **Scripted smoke tests** (debug builds): `CLIPPER_LIBRARY` + `CLIPPER_DEBUG_SCRIPT` drive the editor with real key events against a scratch library (`App/Clipper/Models/DebugScript.swift`). See [editor.md](editor.md).
