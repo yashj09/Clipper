@@ -51,6 +51,12 @@ public struct LoudnessStage: AudioStage {
 
 /// Renders a timeline to a file through the same compositor as preview:
 /// AVAssetReaderVideoCompositionOutput + AVAssetReaderAudioMixOutput → (audio stage) → AVAssetWriter.
+///
+/// A normalised export (preset with a loudness target) needs the whole mix measured before the first sample is
+/// encoded. The composition is built once; the measuring pass decodes and mixes the audio once and keeps the mixed
+/// PCM in a temporary CAF beside the output (`<name>.partial-mix.caf`, ~23 MB per minute), and the render pass
+/// streams the audio from that file through the `LoudnessStage` instead of decoding and mixing everything again.
+/// The capture is removed when the export ends, however it ends. Exports without a target stay single-pass.
 public enum Exporter {
     public static let audioSampleRate = 48_000.0
     public static let audioChannels = 2
@@ -59,23 +65,43 @@ public enum Exporter {
     /// (BS.1770) and normalized with gain + true-peak limiting during the encode.
     public static func export(_ timeline: Timeline, assets: [AssetID: MediaAsset], preset: ExportPreset, to url: URL,
                               progress: (@Sendable (ExportProgress) -> Void)? = nil) async throws -> ExportResult {
+        let size = outputSize(timeline, preset)
+        let built = try await CompositionBuilder.build(timeline, assets: assets,
+                                                       options: BuildOptions(transparent: preset.transparentBackground, outputSize: size))
         var stage: (any AudioStage)?
         var applied: Double?
-        if let target = preset.loudness,
-           let measured = try await measureMix(timeline, assets: assets), measured.integrated > LoudnessMeter.silenceFloor + 1 {
-            let g = LoudnessNormalizer.gain(measured: measured, target: target, ceiling: preset.truePeak, limiterAvailable: true)
-            stage = LoudnessStage(gainDB: g, ceilingDBTP: preset.truePeak)
-            applied = g
+        var capture: URL?
+        defer { if let capture { try? FileManager.default.removeItem(at: capture) } }
+        if let target = preset.loudness {
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let file = mixCaptureURL(for: url)
+            capture = file   // set before measuring, so a failed or cancelled measurement is cleaned up too
+            if let measured = try await measureMix(built, capturingTo: file) {
+                if measured.integrated > LoudnessMeter.silenceFloor + 1 {
+                    let g = LoudnessNormalizer.gain(measured: measured, target: target, ceiling: preset.truePeak, limiterAvailable: true)
+                    stage = LoudnessStage(gainDB: g, ceilingDBTP: preset.truePeak)
+                    applied = g
+                }
+            } else {
+                capture = nil   // no audio, nothing captured
+            }
         }
-        let s = stage, a = applied
+        let s = stage, a = applied, mix = capture
         return try await EncodeScheduler.shared.run(.foreground) {
-            try await render(timeline, assets: assets, preset: preset, to: url, audioStage: s, appliedGain: a, progress: progress)
+            try await render(built, timeline: timeline, preset: preset, to: url, size: size, mixFile: mix,
+                             audioStage: s, appliedGain: a, progress: progress)
         }
     }
 
     /// Integrated loudness of the timeline's final audio mix (nil when it has no audio).
     public static func measureMix(_ timeline: Timeline, assets: [AssetID: MediaAsset]) async throws -> LoudnessInfo? {
-        let built = try await CompositionBuilder.build(timeline, assets: assets)
+        try await measureMix(try await CompositionBuilder.build(timeline, assets: assets), capturingTo: nil)
+    }
+
+    /// Decodes and mixes the composition's audio once, measuring it and, with `capture`, writing the mixed
+    /// 48 kHz stereo Float32 PCM to a CAF whose frame `n` is timeline time `n / 48 kHz` (gaps in the mix output are
+    /// filled with silence, overlaps dropped), so the render pass can stream it back with exact A/V sync.
+    static func measureMix(_ built: BuiltComposition, capturingTo capture: URL?) async throws -> LoudnessInfo? {
         let tracks = try await built.composition.loadTracks(withMediaType: .audio)
         guard !tracks.isEmpty else { return nil }
         let reader = try AVAssetReader(asset: built.composition)
@@ -84,13 +110,17 @@ public enum Exporter {
         out.audioMix = built.audioMix
         out.audioTimePitchAlgorithm = .spectral
         reader.add(out)
+        let writer = try capture.map { try MixCapture.Writer(url: $0) }
         guard reader.startReading() else { throw reader.error ?? CocoaError(.fileReadUnknown) }
         var meter = LoudnessMeter(sampleRate: audioSampleRate, channels: audioChannels)
         while let sb = out.copyNextSampleBuffer() {
-            try Task.checkCancellation()
-            meter.process(interleaved: AudioSampleBuffers.floats(sb))
+            if Task.isCancelled { reader.cancelReading(); throw CancellationError() }
+            let samples = AudioSampleBuffers.floats(sb)
+            meter.process(interleaved: samples)
+            try writer?.write(samples, at: CMSampleBufferGetPresentationTimeStamp(sb))
         }
         if reader.status == .failed { throw reader.error ?? CocoaError(.fileReadUnknown) }
+        writer?.close()
         return meter.result()
     }
 
@@ -104,8 +134,13 @@ public enum Exporter {
         url.deletingPathExtension().appendingPathExtension("partial").appendingPathExtension(url.pathExtension)
     }
 
-    private static func render(_ timeline: Timeline, assets: [AssetID: MediaAsset], preset: ExportPreset, to url: URL,
-                               audioStage: (any AudioStage)?, appliedGain: Double?,
+    /// The measured mix of a normalised export, kept beside the partial file until the export ends.
+    static func mixCaptureURL(for url: URL) -> URL {
+        url.deletingPathExtension().appendingPathExtension("partial-mix").appendingPathExtension("caf")
+    }
+
+    private static func render(_ built: BuiltComposition, timeline: Timeline, preset: ExportPreset, to url: URL, size: CGSize,
+                               mixFile: URL?, audioStage: (any AudioStage)?, appliedGain: Double?,
                                progress: (@Sendable (ExportProgress) -> Void)?) async throws -> ExportResult {
         let start = ContinuousClock.now
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -113,8 +148,8 @@ public enum Exporter {
         try? FileManager.default.removeItem(at: partial)
         let frames: Int
         do {
-            frames = try await encode(timeline, assets: assets, preset: preset, to: partial, audioStage: audioStage,
-                                      start: start, progress: progress)
+            frames = try await encode(built, timeline: timeline, preset: preset, to: partial, size: size, mixFile: mixFile,
+                                      audioStage: audioStage, start: start, progress: progress)
             try install(partial, at: url)
         } catch {
             try? FileManager.default.removeItem(at: partial)
@@ -135,13 +170,11 @@ public enum Exporter {
         }
     }
 
-    /// Encodes the timeline to `url`; returns the number of video frames written.
-    private static func encode(_ timeline: Timeline, assets: [AssetID: MediaAsset], preset: ExportPreset, to url: URL,
-                               audioStage: (any AudioStage)?, start: ContinuousClock.Instant,
+    /// Encodes the composition to `url`; returns the number of video frames written. Audio comes from `mixFile` (the
+    /// measured mix of a normalised export) when given, else straight from the composition's audio mix.
+    private static func encode(_ built: BuiltComposition, timeline: Timeline, preset: ExportPreset, to url: URL, size: CGSize,
+                               mixFile: URL?, audioStage: (any AudioStage)?, start: ContinuousClock.Instant,
                                progress: (@Sendable (ExportProgress) -> Void)?) async throws -> Int {
-        let size = outputSize(timeline, preset)
-        let built = try await CompositionBuilder.build(timeline, assets: assets,
-                                                       options: BuildOptions(transparent: preset.transparentBackground, outputSize: size))
         let comp = built.composition
 
         let reader = try AVAssetReader(asset: comp)
@@ -153,14 +186,18 @@ public enum Exporter {
         videoOut.videoComposition = built.videoComposition
         videoOut.alwaysCopiesSampleData = false
         reader.add(videoOut)
-        let audioTracks = try await comp.loadTracks(withMediaType: .audio)
-        var audioOut: AVAssetReaderAudioMixOutput?
-        if !audioTracks.isEmpty {
-            let o = AVAssetReaderAudioMixOutput(audioTracks: audioTracks, audioSettings: pcmSettings)
-            o.audioMix = built.audioMix
-            o.audioTimePitchAlgorithm = .spectral
-            reader.add(o)
-            audioOut = o
+        var audioOut: (any SampleBufferSource)?
+        if let mixFile {
+            audioOut = try MixCapture.Reader(url: mixFile)
+        } else {
+            let audioTracks = try await comp.loadTracks(withMediaType: .audio)
+            if !audioTracks.isEmpty {
+                let o = AVAssetReaderAudioMixOutput(audioTracks: audioTracks, audioSettings: pcmSettings)
+                o.audioMix = built.audioMix
+                o.audioTimePitchAlgorithm = .spectral
+                reader.add(o)
+                audioOut = o
+            }
         }
 
         let writer = try AVAssetWriter(outputURL: url, fileType: preset.container == .mp4 ? .mp4 : .mov)
@@ -184,9 +221,9 @@ public enum Exporter {
 
         let total = built.duration.seconds
         let counter = FrameCounter()
-        let io = UncheckedSendable((videoIn, videoOut as AVAssetReaderOutput, audioIn, audioOut as AVAssetReaderOutput?))
+        let io = UncheckedSendable((videoIn, videoOut as any SampleBufferSource, audioIn, audioOut))
         let stage = UncheckedSendable(StageBox(audioStage))
-        let rw = UncheckedSendable((reader, writer))
+        let rw = UncheckedSendable((reader, writer, audioOut as? MixCapture.Reader))
         await withTaskCancellationHandler {
             await withTaskGroup(of: Void.self) { group in
                 group.addTask {
@@ -208,11 +245,15 @@ public enum Exporter {
                 }
             }
         } onCancel: {
+            // Stop the sources only: the pumps then see the end of their streams and finish. Cancelling the writer
+            // here instead raced the pumps (requestMediaDataWhenReady throws on a cancelled writer, and a pump
+            // waiting for readiness was never called again, hanging the export).
             rw.value.0.cancelReading()
-            rw.value.1.cancelWriting()
+            rw.value.2?.cancel()
         }
-        try Task.checkCancellation()
+        if Task.isCancelled { writer.cancelWriting(); throw CancellationError() }
         if reader.status == .failed { writer.cancelWriting(); throw reader.error ?? CocoaError(.fileReadUnknown) }
+        if let error = rw.value.2?.error { writer.cancelWriting(); throw error }
         await writer.finishWriting()
         if writer.status != .completed { throw writer.error ?? CocoaError(.fileWriteUnknown) }
         removeSafeSaveLeftovers(of: url)
@@ -281,7 +322,7 @@ public enum Exporter {
     }
 
     /// Drains `output` into `input`, transforming each sample buffer; `finish` may supply one last buffer at the end.
-    static func pump(_ input: AVAssetWriterInput, from output: AVAssetReaderOutput, label: String,
+    static func pump(_ input: AVAssetWriterInput, from output: any SampleBufferSource, label: String,
                      transform: @escaping @Sendable (CMSampleBuffer) -> CMSampleBuffer?,
                      finish: (@Sendable () -> CMSampleBuffer?)? = nil) async {
         let i = UncheckedSendable(input), o = UncheckedSendable(output)

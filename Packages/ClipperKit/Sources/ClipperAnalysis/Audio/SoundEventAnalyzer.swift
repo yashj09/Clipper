@@ -184,7 +184,7 @@ public struct SoundEventAnalyzer: Sendable {
 
     // MARK: - Classification
 
-    private struct ChunkConfig: Sendable {
+    fileprivate struct ChunkConfig: Sendable {
         var url: URL
         var labels: Set<String>
         var minConfidence: Double
@@ -211,7 +211,7 @@ public struct SoundEventAnalyzer: Sendable {
     /// Decodes [from, to] and classifies it; returns windows starting before `keepBefore` with watched-label scores
     /// at or above the threshold (windows with none are dropped). Blocking: run on `DecodeExecutor`.
     private static func classify(_ c: ChunkConfig, asset: AVURLAsset, tracks: [AVAssetTrack], from: Double, to: Double,
-                                 keepBefore: Double, progress: (Double) -> Void) throws -> [Window] {
+                                 keepBefore: Double, progress: @escaping (Double) -> Void) throws -> [Window] {
         let reader: AVAssetReader
         do { reader = try AVAssetReader(asset: asset) } catch { throw SoundEventError.cannotRead(c.url, error.localizedDescription) }
         let output = AVAssetReaderAudioMixOutput(audioTracks: tracks, audioSettings: [
@@ -234,28 +234,9 @@ public struct SoundEventAnalyzer: Sendable {
         }
         defer { if reader.status == .reading { reader.cancelReading() } }
 
-        guard let format = AVAudioFormat(standardFormatWithSampleRate: c.sampleRate, channels: 1) else {
-            throw SoundEventError.analysisFailed("unsupported sample rate \(c.sampleRate)")
-        }
-        let request = try SNClassifySoundRequest(classifierIdentifier: .version1)
-        request.windowDuration = CMTime(seconds: c.window, preferredTimescale: CMTimeScale(c.sampleRate.rounded()))
-        request.overlapFactor = c.overlap
-        let collector = WindowCollector(labels: c.labels, minConfidence: c.minConfidence)
-        let analyzer = SNAudioStreamAnalyzer(format: format)
-        try analyzer.add(request, withObserver: collector)
-
-        // Feed a few seconds at a time: one analyze call per 1024-frame AAC packet costs noticeably more.
-        let capacity = AVAudioFrameCount(c.sampleRate * 4)
-        var pending: AVAudioPCMBuffer?
-        var position: AVAudioFramePosition = 0
+        let stream = try Stream(c, progress: progress)
         var base: Double?
-        func flush() {
-            guard let buffer = pending, buffer.frameLength > 0 else { return }
-            analyzer.analyze(buffer, atAudioFramePosition: position)
-            position += AVAudioFramePosition(buffer.frameLength)
-            pending = nil
-            progress(Double(position) / c.sampleRate)
-        }
+        var scratch: [Float] = []
         while let sample = output.copyNextSampleBuffer() {
             if Task.isCancelled { reader.cancelReading(); throw CancellationError() }
             if base == nil {
@@ -263,37 +244,116 @@ public struct SoundEventAnalyzer: Sendable {
                 base = pts.isNumeric ? pts.seconds : from
             }
             guard let block = CMSampleBufferGetDataBuffer(sample) else { continue }
-            var remaining = CMBlockBufferGetDataLength(block) / MemoryLayout<Float>.size
-            var offset = 0
-            while remaining > 0 {
-                if pending == nil { pending = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: capacity) }
-                guard let buffer = pending, let dst = buffer.floatChannelData?[0] else {
-                    throw SoundEventError.analysisFailed("cannot allocate audio buffer")
-                }
-                let take = min(remaining, Int(buffer.frameCapacity - buffer.frameLength))
-                let status = CMBlockBufferCopyDataBytes(block, atOffset: offset * MemoryLayout<Float>.size,
-                                                        dataLength: take * MemoryLayout<Float>.size,
-                                                        destination: dst + Int(buffer.frameLength))
-                if status != kCMBlockBufferNoErr {
-                    throw SoundEventError.cannotRead(c.url, "CMBlockBufferCopyDataBytes failed (\(status))")
-                }
-                buffer.frameLength += AVAudioFrameCount(take)
-                remaining -= take
-                offset += take
-                if buffer.frameLength == buffer.frameCapacity { flush() }
+            let count = CMBlockBufferGetDataLength(block) / MemoryLayout<Float>.size
+            if scratch.count < count { scratch = [Float](repeating: 0, count: count) }
+            let status = scratch.withUnsafeMutableBytes {
+                CMBlockBufferCopyDataBytes(block, atOffset: 0, dataLength: count * MemoryLayout<Float>.size, destination: $0.baseAddress!)
             }
+            if status != kCMBlockBufferNoErr {
+                throw SoundEventError.cannotRead(c.url, "CMBlockBufferCopyDataBytes failed (\(status))")
+            }
+            try scratch.withUnsafeBufferPointer { try stream.feed(UnsafeBufferPointer(rebasing: $0[..<count])) }
         }
         if reader.status == .failed {
             throw SoundEventError.cannotRead(c.url, reader.error?.localizedDescription ?? "reader failed")
         }
-        flush()
-        analyzer.completeAnalysis()
-        if let error = collector.error { throw SoundEventError.analysisFailed(error) }
         let offset = base ?? from
-        return collector.windows.compactMap { w in
+        return try stream.finish().compactMap { w in
             let shifted = Window(start: w.start + offset, end: w.end + offset, scores: w.scores)
             return shifted.start < keepBefore - 1e-6 ? shifted : nil
         }
+    }
+
+    // MARK: - Streaming
+
+    /// Classifies mono PCM pushed in pieces (one chunk of `analyze(url:)`, or the shared ingest's single stream).
+    /// Audio goes to the analyzer a few seconds at a time: one analyze call per 1024-frame AAC packet costs noticeably
+    /// more. Window times are relative to the first sample. Not thread-safe; feed from one queue.
+    final class Stream: @unchecked Sendable {
+        private let sampleRate: Double
+        private let format: AVAudioFormat
+        private let analyzer: SNAudioStreamAnalyzer
+        private let collector: WindowCollector
+        private let progress: (Double) -> Void
+        private var pending: AVAudioPCMBuffer?
+        private var position: AVAudioFramePosition = 0
+
+        fileprivate convenience init(_ c: ChunkConfig, progress: @escaping (Double) -> Void) throws {
+            try self.init(labels: c.labels, minConfidence: c.minConfidence, window: c.window, overlap: c.overlap,
+                          sampleRate: c.sampleRate, progress: progress)
+        }
+
+        init(labels: Set<String>, minConfidence: Double, window: Double, overlap: Double, sampleRate: Double,
+             progress: @escaping (Double) -> Void) throws {
+            guard let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1) else {
+                throw SoundEventError.analysisFailed("unsupported sample rate \(sampleRate)")
+            }
+            let request = try SNClassifySoundRequest(classifierIdentifier: .version1)
+            request.windowDuration = CMTime(seconds: window, preferredTimescale: CMTimeScale(sampleRate.rounded()))
+            request.overlapFactor = overlap
+            collector = WindowCollector(labels: labels, minConfidence: minConfidence)
+            analyzer = SNAudioStreamAnalyzer(format: format)
+            try analyzer.add(request, withObserver: collector)
+            self.sampleRate = sampleRate
+            self.format = format
+            self.progress = progress
+        }
+
+        func feed(_ samples: UnsafeBufferPointer<Float>) throws {
+            var offset = 0
+            while offset < samples.count {
+                if pending == nil { pending = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(sampleRate * 4)) }
+                guard let buffer = pending, let dst = buffer.floatChannelData?[0] else {
+                    throw SoundEventError.analysisFailed("cannot allocate audio buffer")
+                }
+                let take = min(samples.count - offset, Int(buffer.frameCapacity - buffer.frameLength))
+                (dst + Int(buffer.frameLength)).update(from: samples.baseAddress! + offset, count: take)
+                buffer.frameLength += AVAudioFrameCount(take)
+                offset += take
+                if buffer.frameLength == buffer.frameCapacity { flush() }
+            }
+        }
+
+        /// Ends the stream; returns the windows with a watched label at or above the threshold.
+        func finish() throws -> [Window] {
+            flush()
+            analyzer.completeAnalysis()
+            if let error = collector.error { throw SoundEventError.analysisFailed(error) }
+            return collector.windows
+        }
+
+        private func flush() {
+            guard let buffer = pending, buffer.frameLength > 0 else { return }
+            analyzer.analyze(buffer, atAudioFramePosition: position)
+            position += AVAudioFramePosition(buffer.frameLength)
+            pending = nil
+            progress(Double(position) / sampleRate)
+        }
+    }
+
+    /// A stream for the shared ingest: the whole file in one pass (no chunks), with this analyzer's settings.
+    /// Nil when there is nothing to watch for. Throws for labels the classifier doesn't know.
+    func makeStream(sampleRate: Double, progress: @escaping (Double) -> Void) throws -> Stream? {
+        guard !labels.isEmpty else { return nil }
+        let request = try SNClassifySoundRequest(classifierIdentifier: .version1)
+        let unknown = labels.subtracting(request.knownClassifications)
+        if !unknown.isEmpty { throw SoundEventError.unknownLabels(unknown.sorted()) }
+        return try Stream(labels: labels, minConfidence: minConfidence, window: streamWindow(request),
+                          overlap: min(max(overlap, 0), 0.95), sampleRate: sampleRate, progress: progress)
+    }
+
+    /// The window `analyze(url:)` uses (clamped to the classifier's supported durations).
+    func streamWindow(_ request: SNClassifySoundRequest) -> Double {
+        Self.clampedWindow(windowDuration, constraint: request.windowDurationConstraint)
+    }
+
+    /// Events from a single stream's windows, shifted to source time by the stream's first sample time `base`.
+    /// Media shorter than one window has none, as in `analyze(url:)`.
+    func events(from windows: [Window], base: Double, duration: Double) throws -> SoundEvents {
+        let window = streamWindow(try SNClassifySoundRequest(classifierIdentifier: .version1))
+        guard duration >= window else { return SoundEvents(events: []) }
+        let shifted = windows.map { Window(start: $0.start + base, end: $0.end + base, scores: $0.scores) }
+        return SoundEvents(events: Self.merge(shifted, minConfidence: minConfidence, maxGap: maxGap))
     }
 }
 
