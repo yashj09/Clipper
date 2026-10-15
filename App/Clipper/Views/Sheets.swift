@@ -194,6 +194,13 @@ struct SettingsView: View {
                     Text("Full").tag(1.0); Text("Half").tag(0.5); Text("Quarter").tag(0.25)
                 }
                 Toggle("Use proxies when available", isOn: $model.settings.editing.useProxies)
+                Picker("Make proxies for", selection: $model.settings.editing.proxyPolicy) {
+                    Text("Heavy media (beyond 1080p, ProRes, over 20 min)").tag(ClipperSettings.Editing.ProxyPolicy.automatic)
+                    Text("Every video larger than 720p").tag(ClipperSettings.Editing.ProxyPolicy.always)
+                    Text("Nothing (right-click a clip ▸ Create Proxy)").tag(ClipperSettings.Editing.ProxyPolicy.never)
+                }
+                Text("Proxies are 720p copies the preview plays instead of heavy originals; exports always use the originals. They're made in the background after import and stored in the library's Proxies folder.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             .tabItem { Label("Editing", systemImage: "timeline.selection") }.tag("editing")
             Form {

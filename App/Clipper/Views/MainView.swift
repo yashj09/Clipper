@@ -39,7 +39,7 @@ struct MainView: View {
                     if let editor = model.editor { EditorView(model: model, editor: editor) } else { ProgressView() }
                 }
             }
-            .overlay(alignment: .bottom) { if let a = model.activity { ActivityBar(activity: a) } }
+            .overlay(alignment: .bottom) { if let a = model.activity ?? model.proxyJob { ActivityBar(activity: a) } }
         }
         .sheet(item: Binding(get: { model.draftSheet.map(DraftSheetItem.init) }, set: { model.draftSheet = $0?.ids })) { item in
             DraftSheet(model: model, initial: item.ids)
@@ -93,7 +93,7 @@ struct MediaGridView: View {
             }
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 170), spacing: 12)], spacing: 12) {
                 ForEach(model.assets) { asset in
-                    MediaCard(asset: asset, selected: selection.contains(asset.id))
+                    MediaCard(asset: asset, selected: selection.contains(asset.id), proxy: model.hasProxy(asset))
                         .onTapGesture {
                             if NSEvent.modifierFlags.contains(.command) || NSEvent.modifierFlags.contains(.shift) {
                                 if selection.contains(asset.id) { selection.remove(asset.id) } else { selection.insert(asset.id) }
@@ -104,6 +104,14 @@ struct MediaGridView: View {
                             Button("New Draft…") { model.draftSheet = [asset.id] }
                             if asset.info.duration.seconds > 90 {
                                 Button("Find Highlights…") { Task { await model.findHighlights(asset) } }
+                            }
+                            if asset.info.kind == .video {
+                                Divider()
+                                if model.hasProxy(asset) {
+                                    Button("Remove Proxy") { model.removeProxy(asset) }
+                                } else if min(asset.info.naturalWidth, asset.info.naturalHeight) > ProxyGenerator.shortSide {
+                                    Button("Create Proxy") { model.queueProxies(for: [asset], force: true) }
+                                }
                             }
                         }
                 }
@@ -131,6 +139,7 @@ struct MediaGridView: View {
 struct MediaCard: View {
     let asset: MediaAsset
     let selected: Bool
+    var proxy = false
     @State private var thumb: CGImage?
 
     var body: some View {
@@ -149,6 +158,7 @@ struct MediaCard: View {
                 if asset.info.hasVideo { Text("\(asset.info.displayWidth)×\(asset.info.displayHeight)") }
                 if asset.info.transfer != .sdr { Text(asset.info.transfer.rawValue.uppercased()).foregroundStyle(.orange) }
                 if asset.info.isVFR { Text("VFR") }
+                if proxy { Text("PROXY").foregroundStyle(.green).help("Previews from a 720p proxy (Settings ▸ Editing)") }
             }
             .font(.caption).foregroundStyle(.secondary)
         }

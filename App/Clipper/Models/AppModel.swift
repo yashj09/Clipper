@@ -46,6 +46,10 @@ final class AppModel {
     var section: Section = .media
     private(set) var editor: EditorModel?
     var activity: Activity?
+    /// Background proxy generation (shown when no foreground activity is).
+    var proxyJob: Activity?
+    @ObservationIgnored var proxyQueue: [AssetID] = []
+    @ObservationIgnored var proxyTask: Task<Void, Never>?
     var alert: String?
     var draftSheet: [AssetID]?
     var exportSheet = false
@@ -75,6 +79,7 @@ final class AppModel {
             library = lib
             settings = (try? lib.settings()) ?? ClipperSettings()
             refresh()
+            queueProxies(for: assets)   // anything imported before proxies existed, or while the app was closed
             restartWatching()
             recoverInterruptedPosts()
         } catch {
@@ -102,16 +107,18 @@ final class AppModel {
     func importFiles(_ urls: [URL]) async {
         guard let library else { return }
         let dir = library.mediaURL.appendingPathComponent("Transcoded", isDirectory: true)
+        var imported: [MediaAsset] = []
         for (i, url) in urls.enumerated() {
             activity = Activity(title: "Importing", detail: "\(i + 1)/\(urls.count) \(url.lastPathComponent)", progress: Double(i) / Double(urls.count))
             do {
-                _ = try await library.importMedia([url], mode: .reference) { u in try await Transcoder.makeAsset(u, transcodeDirectory: dir) }
+                imported += try await library.importMedia([url], mode: .reference) { u in try await Transcoder.makeAsset(u, transcodeDirectory: dir) }
             } catch {
                 alert = "Couldn't import \(url.lastPathComponent): \(error)"
             }
         }
         activity = nil
         refresh()
+        queueProxies(for: imported)
     }
 
     func chooseAndImport() {
