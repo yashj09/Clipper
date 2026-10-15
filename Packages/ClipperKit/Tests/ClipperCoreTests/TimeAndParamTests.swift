@@ -124,3 +124,38 @@ import Testing
         #expect(RationalTime(value: .max, scale: 1) > RationalTime(value: .max, scale: ns))
     }
 }
+
+@Suite struct KeyframeEditingTests {
+    let half = RationalTime(value: 1, scale: 60)
+    func s(_ x: Double) -> RationalTime { RationalTime(seconds: x) }
+
+    @Test func settingAddsReplacesAndAnimates() {
+        var p = Param<Double>.constant(1)
+        p = p.setting(1, at: s(0), tolerance: half)
+        #expect(p.isAnimated && p.keys.count == 1 && p.value(at: s(5)) == 1)
+        p = p.setting(2, at: s(2), tolerance: half)
+        #expect(p.keys.map(\.time) == [s(0), s(2)])
+        #expect(p.value(at: s(1)) == 1.5)                        // easeInOut is symmetric at the midpoint
+        p = p.setting(3, at: s(2.01), tolerance: half)            // within half a frame: replaces, keeps the key's time
+        #expect(p.keys.count == 2 && p.keys[1].time == s(2) && p.keys[1].value == 3)
+        #expect(p.key(at: s(2.01), tolerance: half)?.value == 3)
+        #expect(p.key(at: s(1), tolerance: half) == nil)
+    }
+
+    @Test func removingTheLastKeyLeavesAConstant() {
+        var p = Param<Double>.constant(1).setting(1, at: s(0), tolerance: half).setting(4, at: s(2), tolerance: half)
+        p = p.removingKey(at: s(0), tolerance: half)
+        #expect(p.keys.map(\.time) == [s(2)])
+        p = p.removingKey(at: s(2), tolerance: half)
+        #expect(p == .constant(4))
+        #expect(Param<Double>.constant(7).removingKey(at: s(0), tolerance: half) == .constant(7))
+    }
+
+    @Test func itemListsVisualKeyTimesOnce() {
+        var item = Item(range: TimeRange(seconds: 0, 4), content: .solid(.black))
+        item.opacity = Param.constant(1).setting(0, at: s(1), tolerance: half)
+        item.transform.scale = Param.constant(1).setting(2, at: s(1), tolerance: half).setting(1, at: s(3), tolerance: half)
+        item.gain = Param.constant(0).setting(-10, at: s(2), tolerance: half)
+        #expect(item.visualKeyframeTimes == [s(1), s(3)])
+    }
+}

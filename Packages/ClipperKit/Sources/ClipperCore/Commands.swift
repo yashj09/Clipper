@@ -60,15 +60,18 @@ extension Timeline {
         let others = tracks[ti].items.filter { $0.id != item.id && $0.range.overlaps(item.range) }
         if !others.isEmpty {
             guard mode == .overwrite else { throw EditError.overlap(tracks[ti].id) }
+            // Locked items are never cut into, as with blade and trim.
+            if let locked = others.first(where: \.locked) { throw EditError.itemLocked(locked.id) }
             for o in others { try clear(item.range, onTrack: ti, item: o, context: context) }
         }
         tracks[ti].items.removeAll { $0.id == item.id }
         tracks[ti].items.append(item)
         tracks[ti].sortItems()
+        if !others.isEmpty { removeEmptyCaptions() }
     }
 
     /// Removes the part of `item` covered by `range`.
-    private mutating func clear(_ range: TimeRange, onTrack ti: Int, item: Item, context: EditContext) throws {
+    mutating func clear(_ range: TimeRange, onTrack ti: Int, item: Item, context: EditContext) throws {
         guard let ii = tracks[ti].index(of: item.id) else { return }
         if range.start <= item.start && range.end >= item.end {
             tracks[ti].items.remove(at: ii)
@@ -85,6 +88,14 @@ extension Timeline {
     }
 }
 
+extension RationalTime {
+    /// Timeline duration → source duration at `speed`. Frame-aligned times have a small timescale (e.g. 30), where
+    /// `* speed` would round by up to half a frame; working at ≥ the default scale keeps the error under 10 µs.
+    func timesSpeed(_ speed: Double) -> RationalTime {
+        speed == 1 ? self : rescaled(to: Swift.max(scale, RationalTime.defaultScale)) * speed
+    }
+}
+
 extension Item {
     /// Moves the in-point to timeline time `t`, keeping the media under the playhead in sync.
     public func trimmedStart(to t: RationalTime) -> Item {
@@ -92,10 +103,11 @@ extension Item {
         let delta = t - range.start
         c.range = TimeRange(start: t, end: range.end)
         if case .media(var m) = content {
-            m.source = TimeRange(start: m.source.start + delta * m.speed, duration: c.range.duration * m.speed)
+            m.source = TimeRange(start: m.source.start + delta.timesSpeed(m.speed), duration: c.range.duration.timesSpeed(m.speed))
             c.content = .media(m)
         }
         c.shiftKeyframes(by: -delta)
+        c.fitCaptionWords()
         return c
     }
 
@@ -104,10 +116,27 @@ extension Item {
         var c = self
         c.range = TimeRange(start: range.start, end: t)
         if case .media(var m) = content {
-            m.source.duration = c.range.duration * m.speed
+            m.source.duration = c.range.duration.timesSpeed(m.speed)
             c.content = .media(m)
         }
+        c.fitCaptionWords()
         return c
+    }
+
+    /// A caption page shows all of its words at once, so after a split or trim it keeps only the words mostly inside it
+    /// (by their midpoint), clamped to its range — otherwise both halves of a split page would show the whole text.
+    mutating func fitCaptionWords() {
+        guard case .caption(var cap) = content else { return }
+        let d = range.duration
+        cap.words = cap.words.compactMap { w in
+            let mid = (w.start + w.end) * 0.5
+            guard mid >= .zero, mid < d else { return nil }
+            var c = w
+            c.start = .max(w.start, .zero)
+            c.end = .min(w.end, d)
+            return c
+        }
+        content = .caption(cap)
     }
 
     /// Keyframes are item-relative; trimming the head must move them to stay pinned to the same media.
@@ -279,6 +308,7 @@ public struct Blade: EditCommand {
             did = true
         }
         guard did else { throw EditError.nothingToDo }
+        t.removeEmptyCaptions()
         return t
     }
 }

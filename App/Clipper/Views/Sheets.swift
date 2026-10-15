@@ -183,9 +183,10 @@ struct SettingsView: View {
     @Bindable var model: AppModel
     @State private var localModels: [String] = []
     @State private var modelStatus = ""
+    @AppStorage("settingsTab") private var tab = "editing"
 
     var body: some View {
-        TabView {
+        TabView(selection: $tab) {
             Form {
                 Toggle("Ripple edits by default", isOn: $model.settings.editing.rippleByDefault)
                 Toggle("Snapping", isOn: $model.settings.editing.snapping)
@@ -193,8 +194,15 @@ struct SettingsView: View {
                     Text("Full").tag(1.0); Text("Half").tag(0.5); Text("Quarter").tag(0.25)
                 }
                 Toggle("Use proxies when available", isOn: $model.settings.editing.useProxies)
+                Picker("Make proxies for", selection: $model.settings.editing.proxyPolicy) {
+                    Text("Heavy media (beyond 1080p, ProRes, over 20 min)").tag(ClipperSettings.Editing.ProxyPolicy.automatic)
+                    Text("Every video larger than 720p").tag(ClipperSettings.Editing.ProxyPolicy.always)
+                    Text("Nothing (right-click a clip ▸ Create Proxy)").tag(ClipperSettings.Editing.ProxyPolicy.never)
+                }
+                Text("Proxies are 720p copies the preview plays instead of heavy originals; exports always use the originals. They're made in the background after import and stored in the library's Proxies folder.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
-            .tabItem { Label("Editing", systemImage: "timeline.selection") }
+            .tabItem { Label("Editing", systemImage: "timeline.selection") }.tag("editing")
             Form {
                 Picker("Default template", selection: $model.settings.automation.defaultTemplate) {
                     ForEach(model.templates) { Text($0.name).tag($0.id) }
@@ -229,7 +237,7 @@ struct SettingsView: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
-            .tabItem { Label("Automation", systemImage: "wand.and.stars") }
+            .tabItem { Label("Automation", systemImage: "wand.and.stars") }.tag("automation")
             Form {
                 Picker("Default preset", selection: $model.settings.export.defaultPreset) {
                     ForEach(ExportPreset.builtIn) { Text($0.name).tag($0.id) }
@@ -243,7 +251,7 @@ struct SettingsView: View {
                 }
                 Toggle("Write SRT/VTT caption files", isOn: $model.settings.export.writeSidecars)
             }
-            .tabItem { Label("Export", systemImage: "square.and.arrow.up") }
+            .tabItem { Label("Export", systemImage: "square.and.arrow.up") }.tag("export")
             Form {
                 Section("Watch folders") {
                     ForEach(model.settings.integrations.watchFolders, id: \.self) { url in
@@ -268,12 +276,14 @@ struct SettingsView: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
-            .tabItem { Label("Integrations", systemImage: "folder.badge.gearshape") }
+            .tabItem { Label("Integrations", systemImage: "folder.badge.gearshape") }.tag("integrations")
+            ShortcutsSettingsView(model: model)
+                .tabItem { Label("Shortcuts", systemImage: "keyboard") }.tag("shortcuts")
             AccountsSettings(model: model)
-                .tabItem { Label("Accounts", systemImage: "person.crop.circle.badge.checkmark") }
+                .tabItem { Label("Accounts", systemImage: "person.crop.circle.badge.checkmark") }.tag("accounts")
         }
         .formStyle(.grouped)
-        .frame(width: 620, height: 560)
+        .frame(width: 680, height: 600)
         .onChange(of: model.settings) { model.saveSettings() }
     }
 }

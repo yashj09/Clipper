@@ -69,7 +69,7 @@ public actor AnalysisPipeline {
     public static func version(of kind: AnalysisKind) -> Int {
         switch kind {
         case .speech: 1
-        case .transcript: 1
+        case .transcript: 2   // 2: Apple transcripts are fed from the shared ingest (Resampler instead of AVAssetReader resampling)
         case .loudness: 1
         case .faces: 1
         case .beats: 1
@@ -159,18 +159,37 @@ public actor AnalysisPipeline {
         let info = asset.info
         let key = asset.key
 
-        let results = await withTaskGroup(of: (AnalysisKind, Result<Output, Error>).self,
-                                          returning: [(AnalysisKind, Result<Output, Error>)].self) { group in
-            for kind in plan {
+        // Cached kinds first; only the misses decode anything.
+        var results: [(AnalysisKind, Result<Output, Error>)] = []
+        var misses: Set<AnalysisKind> = []
+        for kind in plan {
+            if let hit = await loadCached(kind, analyzerID(kind, options: options), key, cache) {
+                progress?(kind, 1)
+                results.append((kind, .success(hit)))
+            } else {
+                misses.insert(kind)
+            }
+        }
+        let shared = sharedAudioKinds(misses, options: options)
+
+        let computed = await withTaskGroup(of: [(AnalysisKind, Result<Output, Error>)].self,
+                                           returning: [(AnalysisKind, Result<Output, Error>)].self) { group in
+            if !shared.isEmpty {
                 group.addTask(executorPreference: DecodeExecutor.shared) {
-                    (kind, await compute(kind, url: url, info: info, key: key, cache: cache, options: options,
-                                         progress: progress))
+                    await ingestAudio(shared, url: url, info: info, key: key, cache: cache, options: options, progress: progress)
+                }
+            }
+            for kind in misses.subtracting(shared) {
+                group.addTask(executorPreference: DecodeExecutor.shared) {
+                    [(kind, await compute(kind, url: url, info: info, key: key, cache: cache, options: options,
+                                          progress: progress))]
                 }
             }
             var all: [(AnalysisKind, Result<Output, Error>)] = []
-            for await r in group { all.append(r) }
+            for await r in group { all += r }
             return all
         }
+        results += computed
         try Task.checkCancellation()
 
         var analysis = AssetAnalysis()
@@ -206,40 +225,40 @@ public actor AnalysisPipeline {
         do {
             switch kind {
             case .speech:
-                let s: SpeechActivity = try await cached(kind, id, key, cache, progress) {
+                let s: SpeechActivity = try await computed(kind, id, key, cache, progress) {
                     try await speechActivity(url: url, duration: info.duration.seconds)
                 }
                 return .success(.speech(s))
             case .transcript:
-                let t: Transcript = try await cached(kind, id, key, cache, progress) {
+                let t: Transcript = try await computed(kind, id, key, cache, progress) {
                     try await options.transcriber.transcribe(url: url, locale: options.locale, range: nil)
                 }
                 return .success(.transcript(t))
             case .loudness:
-                let l: LoudnessInfo = try await cached(kind, id, key, cache, progress) {
+                let l: LoudnessInfo = try await computed(kind, id, key, cache, progress) {
                     try await AudioFileLoudness.measure(url: url)
                 }
                 return .success(.loudness(l))
             case .faces:
                 let report: (@Sendable (Double) -> Void)? = progress.map { p in { @Sendable f in p(.faces, f) } }
-                let f: FaceTrack = try await cached(kind, id, key, cache, progress) {
+                let f: FaceTrack = try await computed(kind, id, key, cache, progress) {
                     try await options.faces.analyze(url: url, info: info, range: nil, progress: report)
                 }
                 return .success(.faces(f))
             case .beats:
-                let b: BeatGrid = try await cached(kind, id, key, cache, progress) {
+                let b: BeatGrid = try await computed(kind, id, key, cache, progress) {
                     try await MusicAnalyzer.analyze(url: url).beats
                 }
                 return .success(.beats(b))
             case .events:
                 let report: (@Sendable (Double) -> Void)? = progress.map { p in { @Sendable f in p(.events, f) } }
-                let e: SoundEvents = try await cached(kind, id, key, cache, progress) {
+                let e: SoundEvents = try await computed(kind, id, key, cache, progress) {
                     try await options.events.analyze(url: url, range: nil, progress: report)
                 }
                 return .success(.events(e))
             case .visual:
                 let report: (@Sendable (Double) -> Void)? = progress.map { p in { @Sendable f in p(.visual, f) } }
-                let v: VisualActivity = try await cached(kind, id, key, cache, progress) {
+                let v: VisualActivity = try await computed(kind, id, key, cache, progress) {
                     try await options.visual.analyze(url: url, info: info, range: nil, progress: report)
                 }
                 return .success(.visual(v))
@@ -249,26 +268,89 @@ public actor AnalysisPipeline {
         }
     }
 
-    /// Loads `kind` from the cache or computes and stores it.
-    private static func cached<T: Codable & Sendable>(
+    /// The cached artifact for `kind`, if there is a readable one at the current version.
+    private static func loadCached(_ kind: AnalysisKind, _ analyzer: String, _ key: AssetKey,
+                                   _ cache: (any AnalysisCache)?) async -> Output? {
+        guard let cache, let data = await cache.load(key: key, analyzer: analyzer, version: version(of: kind)) else { return nil }
+        let d = CacheCodec.decoder
+        switch kind {
+        case .speech: return (try? d.decode(SpeechActivity.self, from: data)).map(Output.speech)
+        case .transcript: return (try? d.decode(Transcript.self, from: data)).map(Output.transcript)
+        case .loudness: return (try? d.decode(LoudnessInfo.self, from: data)).map(Output.loudness)
+        case .faces: return (try? d.decode(FaceTrack.self, from: data)).map(Output.faces)
+        case .beats: return (try? d.decode(BeatGrid.self, from: data)).map(Output.beats)
+        case .events: return (try? d.decode(SoundEvents.self, from: data)).map(Output.events)
+        case .visual: return (try? d.decode(VisualActivity.self, from: data)).map(Output.visual)
+        }
+    }
+
+    /// Computes `kind` (a cache miss) and stores it.
+    private static func computed<T: Codable & Sendable>(
         _ kind: AnalysisKind, _ analyzer: String, _ key: AssetKey, _ cache: (any AnalysisCache)?, _ progress: Progress?,
         compute: @Sendable () async throws -> T
     ) async throws -> T {
-        let version = version(of: kind)
-        if let cache, let data = await cache.load(key: key, analyzer: analyzer, version: version),
-           let value = try? CacheCodec.decoder.decode(T.self, from: data) {
-            progress?(kind, 1)
-            return value
-        }
         try Task.checkCancellation()
         progress?(kind, 0)
         let value = try await compute()
         try Task.checkCancellation()
-        if let cache, let data = try? CacheCodec.encoder.encode(value) {
-            try? await cache.store(data, key: key, analyzer: analyzer, version: version)
-        }
+        await store(value, kind, analyzer, key, cache)
         progress?(kind, 1)
         return value
+    }
+
+    private static func store<T: Encodable>(_ value: T, _ kind: AnalysisKind, _ analyzer: String, _ key: AssetKey,
+                                            _ cache: (any AnalysisCache)?) async {
+        if let cache, let data = try? CacheCodec.encoder.encode(value) {
+            try? await cache.store(data, key: key, analyzer: analyzer, version: version(of: kind))
+        }
+    }
+
+    // MARK: - Shared audio ingest
+
+    /// The missed kinds to compute from one shared audio decode (`AudioIngest`). Speech always goes through it, as
+    /// does the transcript when the transcriber accepts PCM, so each has one algorithm whatever else is requested.
+    /// Loudness and events join only when they share the decode with another kind; alone they keep their own
+    /// readers (events then splits long media into chunks decoded in parallel, which is faster for that case).
+    static func sharedAudioKinds(_ misses: Set<AnalysisKind>, options: AnalysisOptions) -> Set<AnalysisKind> {
+        var shared = misses.intersection([.speech])
+        if misses.contains(.transcript), options.transcriber is any PCMStreamTranscriber { shared.insert(.transcript) }
+        let joiners = misses.intersection([.loudness, .events])
+        if shared.count + joiners.count >= 2 { shared.formUnion(joiners) }
+        return shared
+    }
+
+    private static func ingestAudio(_ kinds: Set<AnalysisKind>, url: URL, info: MediaInfo, key: AssetKey,
+                                    cache: (any AnalysisCache)?, options: AnalysisOptions,
+                                    progress: Progress?) async -> [(AnalysisKind, Result<Output, Error>)] {
+        if Task.isCancelled { return kinds.map { ($0, .failure(CancellationError())) } }
+        for kind in kinds { progress?(kind, 0) }
+        var request = AudioIngest.Request()
+        request.speech = kinds.contains(.speech)
+        request.loudness = kinds.contains(.loudness)
+        request.events = kinds.contains(.events) ? options.events : nil
+        request.transcriber = kinds.contains(.transcript) ? options.transcriber as? any PCMStreamTranscriber : nil
+        request.locale = options.locale
+        let report: (@Sendable (Double) -> Void)? = progress.map { p in { @Sendable f in p(.events, f) } }
+        let r = await AudioIngest.run(url: url, duration: info.duration.seconds, request: request, eventsProgress: report)
+
+        var out: [(AnalysisKind, Result<Output, Error>)] = []
+        func add<T: Codable & Sendable>(_ kind: AnalysisKind, _ result: Result<T, Error>?, _ wrap: (T) -> Output) async {
+            guard let result else { return }
+            switch result {
+            case .success(let value):
+                if !Task.isCancelled { await store(value, kind, analyzerID(kind, options: options), key, cache) }
+                progress?(kind, 1)
+                out.append((kind, .success(wrap(value))))
+            case .failure(let error):
+                out.append((kind, .failure(error)))
+            }
+        }
+        await add(.speech, r.speech, Output.speech)
+        await add(.loudness, r.loudness, Output.loudness)
+        await add(.events, r.events, Output.events)
+        await add(.transcript, r.transcript, Output.transcript)
+        if Task.isCancelled { return kinds.map { ($0, .failure(CancellationError())) } }
+        return out
     }
 
     // MARK: - Speech activity

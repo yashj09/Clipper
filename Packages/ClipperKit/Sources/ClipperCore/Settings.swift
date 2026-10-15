@@ -16,6 +16,15 @@ public struct ClipperSettings: Codable, Sendable, Equatable {
         /// Preview resolution relative to the canvas (1 = full).
         public var previewScale = 0.5
         public var useProxies = true
+        /// Which media get a proxy made after import.
+        public enum ProxyPolicy: String, Codable, Sendable, CaseIterable {
+            /// Sources beyond 1080p, ProRes and recordings over 20 minutes (`ProxyGenerator.wantsProxy`).
+            case automatic
+            /// Every video larger than a proxy.
+            case always
+            case never
+        }
+        public var proxyPolicy = ProxyPolicy.automatic
         public init() {}
         public init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self), d = Editing()
@@ -23,6 +32,7 @@ public struct ClipperSettings: Codable, Sendable, Equatable {
             snapping = c.value(.snapping, d.snapping)
             previewScale = c.value(.previewScale, d.previewScale)
             useProxies = c.value(.useProxies, d.useProxies)
+            proxyPolicy = c.value(.proxyPolicy, d.proxyPolicy)
         }
     }
 
@@ -100,6 +110,8 @@ public struct ClipperSettings: Codable, Sendable, Equatable {
     public var export = Export()
     public var music = Music()
     public var integrations = Integrations()
+    /// Keyboard shortcuts the user changed (everything else uses the factory shortcuts).
+    public var keyBindings = KeyBindings()
 
     public init() {}
 
@@ -111,6 +123,7 @@ public struct ClipperSettings: Codable, Sendable, Equatable {
         export = (try? c.decode(Export.self, forKey: .export)) ?? Export()
         music = (try? c.decode(Music.self, forKey: .music)) ?? Music()
         integrations = (try? c.decode(Integrations.self, forKey: .integrations)) ?? Integrations()
+        keyBindings = (try? c.decode(KeyBindings.self, forKey: .keyBindings)) ?? KeyBindings()
     }
 }
 

@@ -48,9 +48,14 @@ public final class Library: Sendable {
     public var templatesURL: URL { url.appending(path: "Templates", directoryHint: .isDirectory) }
     public var exportsURL: URL { url.appending(path: "Exports", directoryHint: .isDirectory) }
 
-    /// Folder for generated proxies of one asset (reserved; nothing writes here yet).
+    /// Folder for generated proxies of one asset.
     public func proxiesURL(for key: AssetKey) throws -> URL {
         proxiesURL.appending(path: try Library.safeComponent(key.rawValue), directoryHint: .isDirectory)
+    }
+
+    /// Where an asset's editing proxy is written (`ProxyGenerator`); set it as the asset's `proxyURL` once complete.
+    public func proxyFileURL(for asset: MediaAsset) throws -> URL {
+        try proxiesURL(for: asset.key).appending(path: "proxy.mov", directoryHint: .notDirectory)
     }
 
     /// Where exports go: the settings override if set, else the bundle's `Exports/` folder.

@@ -54,6 +54,15 @@ public struct DraftInput: Sendable {
     }
 }
 
+extension DraftInput {
+    /// What to store in the timeline's provenance so the draft can be re-run (`Redraft`).
+    var record: DraftRecord {
+        DraftRecord(clips: clips.map { DraftRecord.Clip(asset: $0.asset.id, slot: $0.slot, inPoint: $0.inPoint, outPoint: $0.outPoint) },
+                    title: settings.title, captions: settings.captions, music: settings.music,
+                    maxDuration: settings.maxDuration, musicID: settings.musicID)
+    }
+}
+
 /// Human-readable account of what the draft did, shown in the app and CLI.
 public struct DraftReport: Sendable, Equatable {
     public var notes: [String] = []

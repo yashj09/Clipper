@@ -23,7 +23,7 @@ Library and import, analyzers, compositor, four built-in templates, three captio
 ## Phase 2: VOD → many shorts ✅ (built; real-use exit pending)
 Chunked transcription, signals (SoundAnalysis, loudness, scene cuts), highlight scoring (heuristic plus an optional local LLM, see ADR 0007), highlights browser, batch export, saliency-based reframing, watch folders.
 **Exit:** a 2-hour VOD yields 10 ranked candidates in under 15 minutes, and at least 5 of them are worth posting.
-- [x] Speed. 30-min 1080p60 VOD, cold: 104 s for transcript + sound events + visual activity + ranking, 224 MB RAM. Extrapolates to about 7 min for 2 h. Re-runs come from cache (0 s).
+- [x] Speed. 30-min 1080p60 VOD, cold: 104 s for transcript + sound events + visual activity + ranking, 224 MB RAM. Extrapolates to about 7 min for 2 h. (Since then: 31 s for the analysis set, see below.) Re-runs come from cache (0 s).
 - [x] Local LLM re-ranking: Ollama `qwen3.5:4b` ranked 15 candidates in 44 s, with hook titles and critiques. Cloud models are refused.
 - [x] Batch: 3 highlights drafted and exported in 12.5 s total (about 200 fps each, −14 LUFS, SRT).
 - [ ] At least 5 of 10 worth posting on a real VOD of yours (needs your recording and judgement).
@@ -49,3 +49,11 @@ Chunked transcription, signals (SoundAnalysis, loudness, scene cuts), highlight 
 - [x] Facts corrected from official docs: YouTube no longer forces unverified projects to private; Instagram needs no App Review for your own account; Reels via the API are 3 s–15 min and at most 300 MB.
 - [ ] First real upload per platform, once you've created the developer apps (`clipper publish connect <platform> --help-setup`).
 - [ ] Notion/Sheets APIs: not built. The .ics feed covers calendar views without accounts.
+
+## After Phase 4: editor and performance (2026-10-15)
+- [x] **Manual editor**: rebindable keyboard shortcuts (Settings ▸ Shortcuts), media browser with drag-and-drop and Q/W/E/D edits, Add Text, In/Out range delete, J/K/L shuttle, previous/next edit, copy/paste/duplicate, trim to playhead, nudge, speed (25–400%), keyframes in the inspector with markers on clips, right-click menu, and **re-draft keeping your edits**. Guide: [editor.md](editor.md).
+- [x] **Review #23 fixed**: a loudness-normalised export builds the composition and decodes/mixes the audio once (captured to a temporary CAF while measuring).
+- [x] **Shared audio decode** for speech, transcript, loudness and sound events. 30-min VOD highlights set, cold: 36.9 s → 31.2 s (−15%).
+- [x] **Proxies**: 720p HEVC made in the background for heavy media (beyond 1080p, ProRes, over 20 min); 6.5× realtime; `clipper proxy`; the preview falls back to originals when a proxy is missing.
+- [x] Debug-only scripted smoke tests for the editor (real key events, scratch library).
+- [ ] Your check: drag from the browser onto the timeline with the mouse (not scriptable without Accessibility permission).

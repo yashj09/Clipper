@@ -252,7 +252,8 @@ public enum DraftPipeline {
         }.map(\.element)
 
         timeline.provenance = Provenance(template: template.id, templateVersion: template.version, seed: input.settings.seed,
-                                         passes: ["cut", "layout", "visual", "captions", "music", "elements"])
+                                         passes: ["cut", "layout", "visual", "captions", "music", "elements"],
+                                         inputs: input.record)
         var durations = Dictionary(uniqueKeysWithValues: input.clips.map { ($0.asset.id, $0.asset.info.duration) })
         for a in added { durations[a.id] = a.info.duration }
         for issue in timeline.validate(assetDurations: durations) where issue.severity == .error {
@@ -309,7 +310,7 @@ public enum DraftPipeline {
     }
 
     /// A media asset for a music track, with a stable ID derived from the track's ID.
-    static func musicAsset(_ t: MusicTrack) -> MediaAsset {
+    public static func musicAsset(_ t: MusicTrack) -> MediaAsset {
         var g = IDGenerator(seed: stableHash("music|\(t.id)"))
         return MediaAsset(id: g.uuid(), key: AssetKey("music-\(t.id)"), name: t.title, url: t.url,
                           info: MediaInfo(kind: .audio, duration: RationalTime(seconds: t.duration), audioChannels: 2, audioSampleRate: 44_100),

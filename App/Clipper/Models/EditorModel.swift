@@ -14,9 +14,17 @@ final class EditorModel {
     private(set) var project: Project
     var timelineIndex = 0
     private(set) var history = EditHistory()
-    var selection: Set<ItemID> = []
+    /// Changing the selection ends any run of merged edits (nudges, text typing), so the next one is its own undo step.
+    var selection: Set<ItemID> = [] { didSet { if selection != oldValue { history.breakCoalescing() } } }
     var playhead: RationalTime = .zero
     var lastError: String?
+    /// In and Out marks (I / O). Transient: they aren't saved with the project.
+    var inPoint: RationalTime?
+    var outPoint: RationalTime?
+    /// Zoom changes asked of the timeline view by toolbar buttons and shortcuts.
+    var zoomRequest: ZoomRequest? = .fit(UUID())
+    /// What's selected in the editor's media browser — the source for Q / W / E / D edits.
+    var browserSelection: BrowserItem?
 
     /// Assets the timeline can reference (library media + music), by ID.
     var assets: [AssetID: MediaAsset]
@@ -54,18 +62,22 @@ final class EditorModel {
 
     // MARK: Editing
 
-    func perform(_ command: any EditCommand) {
+    /// Applies `command`; false (with `lastError` set and a beep) when it was refused.
+    @discardableResult
+    func perform(_ command: any EditCommand) -> Bool {
         var tl = timeline
         do {
             try history.perform(command, on: &tl, context: context)
         } catch {
             lastError = (error as? EditError)?.description ?? "\(error)"
             NSSound.beep()
-            return
+            return false
         }
+        lastError = nil
         timeline = tl
         selection = selection.filter { tl.item($0) != nil }
         changed()
+        return true
     }
 
     /// Finishes a continuous gesture (slider drag) so the next change becomes a new undo step.
@@ -145,11 +157,12 @@ final class EditorModel {
         selection = []
     }
 
+    /// Locks the selection, or unlocks it when every selected item is already locked. One undo step.
     func toggleLock() {
-        for id in selection {
-            let locked = timeline.item(id)?.locked ?? false
-            perform(ModifyItem(id, name: locked ? "Unlock" : "Lock") { $0.locked = !locked })
-        }
+        let items = selectedItems
+        guard !items.isEmpty else { return }
+        let lock = !items.allSatisfy(\.locked)
+        perform(Batch(items.map { item in ModifyItem(item.id, name: "") { $0.locked = lock } }, name: lock ? "Lock" : "Unlock"))
     }
 
     // MARK: Captions
@@ -182,6 +195,20 @@ final class EditorModel {
     }
 
     func togglePlay() { player.isPlaying ? player.pause() : player.play() }
+
+    /// J / L: start playing in that direction, or double the speed if already going that way (up to 8×). Reverse play
+    /// needs the composition to support it; otherwise J jumps back a second.
+    func shuttle(forward: Bool) {
+        let rate = player.player.rate
+        if forward {
+            player.setRate(rate >= 1 ? min(rate * 2, 8) : 1)
+        } else if player.player.currentItem?.canPlayReverse == true {
+            player.setRate(rate <= -1 ? max(rate * 2, -8) : -1)
+        } else {
+            player.pause()
+            step(frames: -Int(timeline.canvas.frameRate.fps.rounded()))
+        }
+    }
 
     func seek(to t: RationalTime) {
         let clamped = RationalTime.min(RationalTime.max(t, .zero), timeline.duration)
@@ -253,6 +280,14 @@ final class PlayerController {
         }
         player.play()
         isPlaying = true
+    }
+
+    func setRate(_ rate: Float) {
+        if rate > 0, let item = player.currentItem, item.currentTime() >= item.duration - CMTime(value: 1, timescale: 30) {
+            player.seek(to: .zero)
+        }
+        player.rate = rate
+        isPlaying = rate != 0
     }
 
     func pause() {

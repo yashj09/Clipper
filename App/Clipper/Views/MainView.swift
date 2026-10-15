@@ -39,7 +39,7 @@ struct MainView: View {
                     if let editor = model.editor { EditorView(model: model, editor: editor) } else { ProgressView() }
                 }
             }
-            .overlay(alignment: .bottom) { if let a = model.activity { ActivityBar(activity: a) } }
+            .overlay(alignment: .bottom) { if let a = model.activity ?? model.proxyJob { ActivityBar(activity: a) } }
         }
         .sheet(item: Binding(get: { model.draftSheet.map(DraftSheetItem.init) }, set: { model.draftSheet = $0?.ids })) { item in
             DraftSheet(model: model, initial: item.ids)
@@ -48,11 +48,13 @@ struct MainView: View {
         .sheet(item: $model.highlightSession) { session in HighlightsSheet(model: model, session: session) }
         .sheet(isPresented: $model.saveTemplateSheet) { SaveTemplateSheet(model: model) }
         .sheet(isPresented: $model.publishSheet) { PublishSheet(model: model) }
+        .sheet(isPresented: $model.redraftSheet) { if let editor = model.editor { RedraftSheet(model: model, editor: editor) } }
         .sheet(item: $model.templateEdit) { req in TemplateEditorSheet(model: model, original: req.template, isNew: req.isNew) }
         .alert("Clipper", isPresented: Binding(get: { model.alert != nil }, set: { if !$0 { model.alert = nil } })) {
             Button("OK") { model.alert = nil }
         } message: { Text(model.alert ?? "") }
         .overlay { if let e = model.libraryError { Text(e).padding().background(.red.opacity(0.2)) } }
+        .background(KeyMonitorHost(monitor: model.keyMonitor))
     }
 }
 
@@ -91,7 +93,7 @@ struct MediaGridView: View {
             }
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 170), spacing: 12)], spacing: 12) {
                 ForEach(model.assets) { asset in
-                    MediaCard(asset: asset, selected: selection.contains(asset.id))
+                    MediaCard(asset: asset, selected: selection.contains(asset.id), proxy: model.hasProxy(asset))
                         .onTapGesture {
                             if NSEvent.modifierFlags.contains(.command) || NSEvent.modifierFlags.contains(.shift) {
                                 if selection.contains(asset.id) { selection.remove(asset.id) } else { selection.insert(asset.id) }
@@ -102,6 +104,14 @@ struct MediaGridView: View {
                             Button("New Draft…") { model.draftSheet = [asset.id] }
                             if asset.info.duration.seconds > 90 {
                                 Button("Find Highlights…") { Task { await model.findHighlights(asset) } }
+                            }
+                            if asset.info.kind == .video {
+                                Divider()
+                                if model.hasProxy(asset) {
+                                    Button("Remove Proxy") { model.removeProxy(asset) }
+                                } else if min(asset.info.naturalWidth, asset.info.naturalHeight) > ProxyGenerator.shortSide {
+                                    Button("Create Proxy") { model.queueProxies(for: [asset], force: true) }
+                                }
                             }
                         }
                 }
@@ -129,6 +139,7 @@ struct MediaGridView: View {
 struct MediaCard: View {
     let asset: MediaAsset
     let selected: Bool
+    var proxy = false
     @State private var thumb: CGImage?
 
     var body: some View {
@@ -147,6 +158,7 @@ struct MediaCard: View {
                 if asset.info.hasVideo { Text("\(asset.info.displayWidth)×\(asset.info.displayHeight)") }
                 if asset.info.transfer != .sdr { Text(asset.info.transfer.rawValue.uppercased()).foregroundStyle(.orange) }
                 if asset.info.isVFR { Text("VFR") }
+                if proxy { Text("PROXY").foregroundStyle(.green).help("Previews from a 720p proxy (Settings ▸ Editing)") }
             }
             .font(.caption).foregroundStyle(.secondary)
         }
@@ -265,17 +277,19 @@ struct TemplatesView: View {
 struct EditorView: View {
     @Bindable var model: AppModel
     @Bindable var editor: EditorModel
-    @State private var zoom: TimelineView.ZoomRequest? = .fit(UUID())
+    @AppStorage("showBrowser") private var showBrowser = true
 
     var body: some View {
         VSplitView {
             HSplitView {
+                if showBrowser { BrowserView(model: model, editor: editor).frame(minWidth: 200, idealWidth: 240, maxWidth: 340) }
                 ViewerView(editor: editor).frame(minWidth: 360, minHeight: 300)
                 InspectorView(editor: editor).frame(minWidth: 260, idealWidth: 300, maxWidth: 380)
             }
-            TimelineView(editor: editor, zoomRequest: zoom).frame(minHeight: 220, idealHeight: 320)
+            TimelineView(model: model, editor: editor).frame(minHeight: 220, idealHeight: 320)
         }
         .navigationTitle(editor.project.name)
+        .onChange(of: editor.timeline.id) { editor.inPoint = nil; editor.outPoint = nil }
         .toolbar {
             ToolbarItem(placement: .navigation) {
                 if editor.project.timelines.count > 1 {
@@ -285,22 +299,30 @@ struct EditorView: View {
                     .frame(maxWidth: 280)
                 }
             }
+            ToolbarItem(placement: .navigation) {
+                Toggle(isOn: $showBrowser) { Label("Browser", systemImage: "sidebar.squares.left") }.help("Show or hide the media browser")
+            }
             ToolbarItemGroup {
                 Button { editor.undo() } label: { Label("Undo", systemImage: "arrow.uturn.backward") }.disabled(!editor.history.canUndo)
                     .help(editor.history.undoName.map { "Undo \($0)" } ?? "Undo")
                 Button { editor.redo() } label: { Label("Redo", systemImage: "arrow.uturn.forward") }.disabled(!editor.history.canRedo)
-                Button { editor.bladeAtPlayhead() } label: { Label("Split", systemImage: "scissors") }.help("Split at playhead (B)")
-                Button { editor.deleteSelection(ripple: model.settings.editing.rippleByDefault) } label: { Label("Delete", systemImage: "trash") }
-                    .disabled(editor.selection.isEmpty)
+                Button { editor.bladeAtPlayhead() } label: { Label("Split", systemImage: "scissors") }.help(help(.blade))
+                Button { editor.addText() } label: { Label("Text", systemImage: "textformat") }.help(help(.addText))
+                Button { editor.run(.delete) } label: { Label("Delete", systemImage: "trash") }
+                    .disabled(editor.selection.isEmpty && editor.markedRange == nil)
+                    .help("Delete the selection, or the In–Out range when nothing is selected")
                 Toggle(isOn: Binding(get: { model.settings.editing.rippleByDefault }, set: { model.settings.editing.rippleByDefault = $0; model.saveSettings() })) {
                     Label("Ripple", systemImage: "arrow.left.and.right.righttriangle.left.righttriangle.right")
                 }.help("Ripple edits close gaps (hold ⌥ while trimming to invert)")
                 Toggle(isOn: Binding(get: { model.settings.editing.snapping }, set: { model.settings.editing.snapping = $0; model.saveSettings() })) {
                     Label("Snap", systemImage: "arrow.right.to.line")
                 }
-                Button { zoom = .zoomOut(UUID()) } label: { Label("Zoom Out", systemImage: "minus.magnifyingglass") }
-                Button { zoom = .fit(UUID()) } label: { Label("Fit", systemImage: "arrow.left.and.right") }
-                Button { zoom = .zoomIn(UUID()) } label: { Label("Zoom In", systemImage: "plus.magnifyingglass") }
+                Button { editor.run(.zoomOut) } label: { Label("Zoom Out", systemImage: "minus.magnifyingglass") }.help(help(.zoomOut))
+                Button { editor.run(.zoomToFit) } label: { Label("Fit", systemImage: "arrow.left.and.right") }.help(help(.zoomToFit))
+                Button { editor.run(.zoomIn) } label: { Label("Zoom In", systemImage: "plus.magnifyingglass") }.help(help(.zoomIn))
+                Button { model.redraftSheet = true } label: { Label("Re-draft", systemImage: "wand.and.stars") }
+                    .help("Run the automatic draft again (another template or variation), keeping what you locked or added")
+                    .disabled(editor.timeline.provenance == nil)
                 CaptionsMenu(editor: editor)
                 Button { model.saveTemplateSheet = true } label: { Label("Save as Template", systemImage: "rectangle.stack.badge.plus") }
                     .help("Save this layout, titles, captions and music settings as a reusable template")
@@ -312,6 +334,13 @@ struct EditorView: View {
     }
 }
 
+
+extension EditorView {
+    /// Tooltip naming the action and its current shortcut.
+    func help(_ action: EditorAction) -> String {
+        action.title + (model.settings.keyBindings.shortcuts(for: action).first.map { " (\($0.display))" } ?? "")
+    }
+}
 
 /// Translate captions on-device and pick which language is burned in.
 struct CaptionsMenu: View {

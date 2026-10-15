@@ -244,8 +244,37 @@ public struct Provenance: Codable, Sendable, Equatable {
     public var templateVersion: Int
     public var seed: UInt64
     public var passes: [String]
-    public init(template: String, templateVersion: Int, seed: UInt64, passes: [String]) {
+    /// The draft's inputs, for re-drafting. Optional: timelines drafted before it existed decode without it.
+    public var inputs: DraftRecord?
+    public init(template: String, templateVersion: Int, seed: UInt64, passes: [String], inputs: DraftRecord? = nil) {
         self.template = template; self.templateVersion = templateVersion; self.seed = seed; self.passes = passes
+        self.inputs = inputs
+    }
+}
+
+/// The user-facing inputs of a draft (clips per slot and the draft options), enough to run it again.
+public struct DraftRecord: Codable, Sendable, Equatable {
+    public struct Clip: Codable, Sendable, Equatable {
+        public var asset: AssetID
+        /// nil = the template's primary slot.
+        public var slot: String?
+        /// Trim of the source in seconds (highlights use these).
+        public var inPoint: Double?
+        public var outPoint: Double?
+        public init(asset: AssetID, slot: String? = nil, inPoint: Double? = nil, outPoint: Double? = nil) {
+            self.asset = asset; self.slot = slot; self.inPoint = inPoint; self.outPoint = outPoint
+        }
+    }
+    public var clips: [Clip]
+    public var title: String?
+    public var captions: Bool?
+    public var music: Bool?
+    public var maxDuration: Double?
+    public var musicID: String?
+    public init(clips: [Clip], title: String? = nil, captions: Bool? = nil, music: Bool? = nil, maxDuration: Double? = nil,
+                musicID: String? = nil) {
+        self.clips = clips; self.title = title; self.captions = captions; self.music = music
+        self.maxDuration = maxDuration; self.musicID = musicID
     }
 }
 

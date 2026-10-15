@@ -1,5 +1,6 @@
 import AVFoundation
 import ClipperCore
+import ClipperEngine
 import CoreMedia
 import Foundation
 import Speech
@@ -11,12 +12,13 @@ import Speech
 /// preferred PCM format and streamed buffer by buffer (`analyzeSequence(_:)`), so long recordings need neither a temp
 /// file nor the whole waveform in memory. The analyzer pulls buffers, which gives natural back-pressure.
 /// Downloads the on-device model for the locale through `AssetInventory` the first time it is needed.
-public struct AppleTranscriber: Transcriber {
+public struct AppleTranscriber: PCMStreamTranscriber {
     public var id: String { "apple" }
 
     public init() {}
 
-    public func transcribe(url: URL, locale: Locale, range: ClosedRange<Double>? = nil) async throws -> Transcript {
+    /// The transcriber module for `locale`, its on-device assets installed, and the audio format it wants.
+    private func prepare(_ locale: Locale) async throws -> (SpeechTranscriber, Locale, AVAudioFormat) {
         guard SpeechTranscriber.isAvailable else { throw TranscriptionError.unavailable("SpeechTranscriber is not available on this device") }
         guard let supported = await SpeechTranscriber.supportedLocale(equivalentTo: locale) else {
             throw TranscriptionError.unsupportedLocale(locale.identifier)
@@ -30,8 +32,39 @@ public struct AppleTranscriber: Transcriber {
             throw TranscriptionError.unavailable("no audio format compatible with SpeechTranscriber")
         }
         try Task.checkCancellation()
+        return (transcriber, supported, format)
+    }
 
-        let source = try await PCMStreamSource(url: url, format: format, range: range)
+    public func streamSampleRate(locale: Locale) async throws -> Double {
+        try await prepare(locale).2.sampleRate
+    }
+
+    /// Shared-ingest input: mono Float32 at `sampleRate` (the analyzer format's rate), converted to the analyzer's
+    /// sample format here (no rate change).
+    public func transcribe(pcm: PCMChannel, sampleRate: Double, locale: Locale) async throws -> Transcript {
+        let (transcriber, supported, format) = try await prepare(locale)
+        guard format.sampleRate == sampleRate, format.channelCount == 1 else {
+            pcm.close()
+            throw TranscriptionError.failed("stream is \(sampleRate) Hz mono; the analyzer wants \(format)")
+        }
+        let input = try ChannelInputSequence(channel: pcm, format: format)
+        do {
+            var words = try await run(transcriber, input: input, onCancel: { pcm.close() })
+            pcm.close()
+            let offset = pcm.startTime
+            if offset != 0 { for i in words.indices { words[i].start += offset; words[i].end += offset } }
+            words.sort { $0.start < $1.start }
+            return Transcript(locale: supported.identifier(.bcp47), engine: id, words: Fillers.markFillers(words))
+        } catch {
+            pcm.close()
+            throw error
+        }
+    }
+
+    /// Runs the analyzer over `input` and collects the words (times relative to the first sample).
+    private func run<Input: AsyncSequence & Sendable>(_ transcriber: SpeechTranscriber, input: Input,
+                                                     onCancel: @escaping @Sendable () -> Void) async throws -> [TranscriptWord]
+    where Input.Element == AnalyzerInput {
         let analyzer = SpeechAnalyzer(modules: [transcriber])
         let results = transcriber.results
         let collector = Task {
@@ -50,33 +83,48 @@ public struct AppleTranscriber: Transcriber {
             }
             return words
         }
-
         do {
-            try await withTaskCancellationHandler {
-                if let last = try await analyzer.analyzeSequence(PCMInputSequence(source: source)) {
+            let heardAudio = try await withTaskCancellationHandler {
+                if let last = try await analyzer.analyzeSequence(input) {
                     try await analyzer.finalizeAndFinish(through: last)
-                } else {
-                    await analyzer.cancelAndFinishNow()
+                    return true
                 }
+                await analyzer.cancelAndFinishNow()
+                return false
             } onCancel: {
-                source.cancel()
+                onCancel()
             }
             try Task.checkCancellation()
-            if let error = source.error { throw error }
+            // With no audio at all the results stream is not guaranteed to end; there is nothing to collect anyway.
+            if !heardAudio { collector.cancel(); return [] }
         } catch {
-            source.cancel()
+            onCancel()
             await analyzer.cancelAndFinishNow()
             collector.cancel()
             throw error
         }
+        let words = collector
+        return try await withTaskCancellationHandler { try await words.value } onCancel: { words.cancel() }
+    }
 
-        let offset = source.startTime ?? range?.lowerBound ?? 0
-        var words = try await collector.value
-        if offset != 0 {
-            for i in words.indices { words[i].start += offset; words[i].end += offset }
+    public func transcribe(url: URL, locale: Locale, range: ClosedRange<Double>? = nil) async throws -> Transcript {
+        let (transcriber, supported, format) = try await prepare(locale)
+        let source = try await PCMStreamSource(url: url, format: format, range: range)
+        let words: [TranscriptWord]
+        do {
+            words = try await run(transcriber, input: PCMInputSequence(source: source), onCancel: { source.cancel() })
+            if let error = source.error { throw error }
+        } catch {
+            source.cancel()
+            throw error
         }
-        words.sort { $0.start < $1.start }
-        return Transcript(locale: supported.identifier(.bcp47), engine: id, words: Fillers.markFillers(words))
+        let offset = source.startTime ?? range?.lowerBound ?? 0
+        var shifted = words
+        if offset != 0 {
+            for i in shifted.indices { shifted[i].start += offset; shifted[i].end += offset }
+        }
+        shifted.sort { $0.start < $1.start }
+        return Transcript(locale: supported.identifier(.bcp47), engine: id, words: Fillers.markFillers(shifted))
     }
 }
 
@@ -199,4 +247,50 @@ struct PCMInputSequence: AsyncSequence, Sendable {
     }
 
     func makeAsyncIterator() -> AsyncIterator { AsyncIterator(source: source) }
+}
+
+/// Shared-ingest input: chunks of mono Float32 from a `PCMChannel`, converted to the analyzer's sample format at the
+/// same rate (Int16 or Float; the rate already matches, so no resampling happens here).
+struct ChannelInputSequence: AsyncSequence, Sendable {
+    typealias Element = AnalyzerInput
+    let channel: PCMChannel
+    let converter: UncheckedSendable<AVAudioConverter?>
+    let inFormat: UncheckedSendable<AVAudioFormat>
+    let outFormat: UncheckedSendable<AVAudioFormat>
+
+    init(channel: PCMChannel, format: AVAudioFormat) throws {
+        guard let float = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: format.sampleRate, channels: 1, interleaved: false)
+        else { throw TranscriptionError.failed("unsupported analyzer format \(format)") }
+        self.channel = channel
+        inFormat = UncheckedSendable(float)
+        outFormat = UncheckedSendable(format)
+        let same = float == format
+        converter = UncheckedSendable(same ? nil : AVAudioConverter(from: float, to: format))
+        if !same, converter.value == nil { throw TranscriptionError.failed("cannot convert to \(format)") }
+    }
+
+    struct AsyncIterator: AsyncIteratorProtocol {
+        let sequence: ChannelInputSequence
+        mutating func next() async throws -> AnalyzerInput? {
+            guard let chunk = try await sequence.channel.next() else { return nil }
+            return try sequence.input(chunk)
+        }
+    }
+
+    func makeAsyncIterator() -> AsyncIterator { AsyncIterator(sequence: self) }
+
+    fileprivate func input(_ chunk: [Float]) throws -> AnalyzerInput {
+        let n = AVAudioFrameCount(chunk.count)
+        guard let floats = AVAudioPCMBuffer(pcmFormat: inFormat.value, frameCapacity: n) else {
+            throw TranscriptionError.failed("cannot allocate audio buffer")
+        }
+        floats.frameLength = n
+        chunk.withUnsafeBufferPointer { floats.floatChannelData![0].update(from: $0.baseAddress!, count: chunk.count) }
+        guard let converter = converter.value else { return AnalyzerInput(buffer: floats) }
+        guard let out = AVAudioPCMBuffer(pcmFormat: outFormat.value, frameCapacity: n) else {
+            throw TranscriptionError.failed("cannot allocate audio buffer")
+        }
+        try converter.convert(to: out, from: floats)
+        return AnalyzerInput(buffer: out)
+    }
 }
