@@ -1,5 +1,6 @@
 #if DEBUG
 import AppKit
+import AVFoundation
 import ClipperCore
 import Foundation
 
@@ -109,6 +110,30 @@ enum DebugScript {
             let parts = rest.split(separator: " ").map(String.init)
             guard parts.count == 2, let kind = ClipperCore.Transition.Kind(rawValue: parts[0]), let d = Double(parts[1]), let editor = model.editor else { return log("bad transition") }
             editor.perform(Batch(editor.selectedItems.map { ModifyItem($0.id, name: "") { $0.transition = ClipperCore.Transition(kind, duration: RationalTime(seconds: d)) } }, name: "Transition"))
+        case "drag":
+            // drag <fromX> <fromY> <toX> <toY> [option|shift] — fractions of the picture in the viewer; real mouse events
+            let parts = rest.split(separator: " ").map(String.init)
+            let n = parts.prefix(4).compactMap(Double.init)
+            guard n.count == 4, let window = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }),
+                  let picture = Self.playerView(in: window.contentView!) else { return log("bad drag / no viewer") }
+            let flags: NSEvent.ModifierFlags = parts.contains("option") ? .option : (parts.contains("shift") ? .shift : [])
+            let r = picture.convert(picture.bounds, to: nil)   // window coordinates (y up)
+            func point(_ fx: Double, _ fy: Double) -> CGPoint { CGPoint(x: r.minX + r.width * fx, y: r.maxY - r.height * fy) }
+            func post(_ type: NSEvent.EventType, _ p: CGPoint) {
+                if let e = NSEvent.mouseEvent(with: type, location: p, modifierFlags: flags, timestamp: ProcessInfo.processInfo.systemUptime,
+                                              windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1) {
+                    NSApp.postEvent(e, atStart: false)
+                }
+            }
+            post(.leftMouseDown, point(n[0], n[1]))
+            try? await Task.sleep(for: .milliseconds(80))
+            for i in 1...10 {
+                let u = Double(i) / 10
+                post(.leftMouseDragged, point(n[0] + (n[2] - n[0]) * u, n[1] + (n[3] - n[1]) * u))
+                try? await Task.sleep(for: .milliseconds(30))
+            }
+            post(.leftMouseUp, point(n[2], n[3]))
+            try? await Task.sleep(for: .milliseconds(300))
         case "bind":
             // bind <action> <shortcut spec>: the same path as recording a shortcut in Settings.
             let parts = rest.split(separator: " ").map(String.init)
@@ -132,6 +157,13 @@ enum DebugScript {
         if let e = model.editor?.lastError { log("editor error: \(e)"); model.editor?.lastError = nil }
     }
 
+    /// The view hosting the preview's AVPlayerLayer (the picture).
+    static func playerView(in view: NSView) -> NSView? {
+        if view.layer is AVPlayerLayer { return view }
+        for sub in view.subviews { if let v = playerView(in: sub) { return v } }
+        return nil
+    }
+
     private static func browserItem(_ args: [String], _ model: AppModel) -> BrowserItem? {
         guard let kind = args.first else { return nil }
         let name = args.dropFirst().joined(separator: " ")
@@ -147,7 +179,7 @@ enum DebugScript {
         let tl = editor.timeline
         var out = "duration \(String(format: "%.3f", tl.duration.seconds)) playhead \(String(format: "%.3f", editor.playhead.seconds))"
         out += " in \(editor.inPoint.map { String(format: "%.3f", $0.seconds) } ?? "-") out \(editor.outPoint.map { String(format: "%.3f", $0.seconds) } ?? "-")"
-        out += " selected \(editor.selection.count) undo \(editor.history.undoName ?? "-") playing \(editor.player.isPlaying)\n"
+        out += " selected \(editor.selectedItems.map(\.name).joined(separator: ","))(\(editor.selection.count)) undo \(editor.history.undoName ?? "-") playing \(editor.player.isPlaying)\n"
         for t in tl.tracks {
             out += "\(t.kind.rawValue) \(t.name):"
             for i in t.items {

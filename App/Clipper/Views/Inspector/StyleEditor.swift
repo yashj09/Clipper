@@ -44,7 +44,7 @@ struct StyleEditor: View {
             }
             .pickerStyle(.radioGroup)
         }
-        FontRow(font: style.font) { f in edit("Font", "font") { $0.font = f } }
+        FontRow(font: style.font) { f in edit("Font", nil) { $0.font = f } }
         LabeledContent("Size") {
             HStack {
                 Slider(value: binding(\.size, "size"), in: 0.02...0.12) { e in if !e { editor.endGesture() } }
@@ -52,14 +52,14 @@ struct StyleEditor: View {
             }
         }
         ColorPicker("Text colour", selection: colorBinding(\.color, "color"), supportsOpacity: false)
-        Toggle("UPPERCASE", isOn: Binding(get: { style.uppercase }, set: { v in edit("Uppercase", "upper") { $0.uppercase = v } }))
-        Picker("Align", selection: Binding(get: { style.alignment }, set: { v in edit("Align", "align") { $0.alignment = v } })) {
+        Toggle("UPPERCASE", isOn: Binding(get: { style.uppercase }, set: { v in edit("Uppercase", nil) { $0.uppercase = v } }))
+        Picker("Align", selection: Binding(get: { style.alignment }, set: { v in edit("Align", nil) { $0.alignment = v } })) {
             Text("Left").tag(TextStyle.Alignment.left); Text("Centre").tag(TextStyle.Alignment.center); Text("Right").tag(TextStyle.Alignment.right)
         }
         .pickerStyle(.segmented)
 
         Toggle("Outline", isOn: Binding(get: { style.stroke != nil && style.strokeWidth > 0 }, set: { on in
-            edit("Outline", "stroke") { s in s.stroke = on ? (s.stroke ?? .black) : nil; s.strokeWidth = on ? max(s.strokeWidth, 0.08) : 0 }
+            edit("Outline", nil) { s in s.stroke = on ? (s.stroke ?? .black) : nil; s.strokeWidth = on ? max(s.strokeWidth, 0.08) : 0 }
         }))
         if style.stroke != nil, style.strokeWidth > 0 {
             ColorPicker("Outline colour", selection: Binding(get: { (style.stroke ?? .black).color }, set: { c in edit("Outline Colour", "strokeColor") { $0.stroke = RGBA(c) } }))
@@ -67,9 +67,9 @@ struct StyleEditor: View {
                 Slider(value: binding(\.strokeWidth, "strokeWidth"), in: 0.01...0.25) { e in if !e { editor.endGesture() } }
             }
         }
-        Toggle("Shadow", isOn: Binding(get: { style.shadow != nil }, set: { on in edit("Shadow", "shadow") { $0.shadow = on ? TextStyle.Shadow() : nil } }))
+        Toggle("Shadow", isOn: Binding(get: { style.shadow != nil }, set: { on in edit("Shadow", nil) { $0.shadow = on ? TextStyle.Shadow() : nil } }))
         Toggle("Background box", isOn: Binding(get: { style.box != nil }, set: { on in
-            edit("Background", "box") { $0.box = on ? TextStyle.Box(color: RGBA(0, 0, 0, 0.6)) : nil }
+            edit("Background", nil) { $0.box = on ? TextStyle.Box(color: RGBA(0, 0, 0, 0.6)) : nil }
         }))
         if let box = style.box {
             ColorPicker("Box colour", selection: Binding(get: { box.color.color }, set: { c in edit("Box Colour", "boxColor") { $0.box?.color = RGBA(c) } }), supportsOpacity: true)
@@ -93,24 +93,24 @@ struct StyleEditor: View {
 
         if target == .captions {
             Toggle("Highlight the spoken word", isOn: Binding(get: { style.highlight != nil }, set: { on in
-                edit("Highlight", "hl") { $0.highlight = on ? TextStyle.Highlight(color: RGBA(hex: "#FFD60A")) : nil }
+                edit("Highlight", nil) { $0.highlight = on ? TextStyle.Highlight(color: RGBA(hex: "#FFD60A")) : nil }
             }))
             if let hl = style.highlight {
                 ColorPicker("Highlight colour", selection: Binding(get: { (hl.color ?? .white).color }, set: { c in edit("Highlight Colour", "hlColor") { $0.highlight?.color = RGBA(c) } }))
                 Toggle("Box behind the spoken word", isOn: Binding(get: { hl.box != nil }, set: { on in
-                    edit("Highlight Box", "hlBox") { $0.highlight?.box = on ? RGBA(hex: "#7C3AED") : nil }
+                    edit("Highlight Box", nil) { $0.highlight?.box = on ? RGBA(hex: "#7C3AED") : nil }
                 }))
                 if let b = hl.box {
                     ColorPicker("Word box colour", selection: Binding(get: { b.color }, set: { c in edit("Word Box Colour", "hlBoxColor") { $0.highlight?.box = RGBA(c) } }))
                 }
             }
             Toggle("Colour keywords", isOn: Binding(get: { style.emphasisColor != nil }, set: { on in
-                edit("Keyword Colour", "emph") { $0.emphasisColor = on ? RGBA(hex: "#4ADE80") : nil }
+                edit("Keyword Colour", nil) { $0.emphasisColor = on ? RGBA(hex: "#4ADE80") : nil }
             }))
             if let e = style.emphasisColor {
                 ColorPicker("Keyword colour", selection: Binding(get: { e.color }, set: { c in edit("Keyword Colour", "emphColor") { $0.emphasisColor = RGBA(c) } }))
             }
-            Picker("Animation", selection: Binding(get: { style.animation }, set: { v in edit("Animation", "anim") { $0.animation = v } })) {
+            Picker("Animation", selection: Binding(get: { style.animation }, set: { v in edit("Animation", nil) { $0.animation = v } })) {
                 Text("None").tag(TextStyle.Animation.none); Text("Pop in").tag(TextStyle.Animation.pop)
                 Text("Fade in").tag(TextStyle.Animation.fade); Text("Word by word").tag(TextStyle.Animation.wordByWord)
             }
@@ -130,7 +130,9 @@ struct StyleEditor: View {
     }
 
     /// Changes the style (for all its users), or — with "Only this one" — a copy given to just this item.
-    private func edit(_ name: String, _ field: String, _ change: @escaping @Sendable (inout TextStyle) -> Void) {
+    /// `field` merges consecutive changes of a continuous control (slider, colour well) into one undo step; toggles and
+    /// pickers pass nil so each change is its own step.
+    private func edit(_ name: String, _ field: String?, _ change: @escaping @Sendable (inout TextStyle) -> Void) {
         var s = style
         change(&s)
         if onlyThis, let itemID, users.count > 1 {
@@ -146,7 +148,7 @@ struct StyleEditor: View {
             return
         }
         let key = styleKey, newStyle = s
-        editor.perform(ModifyTimeline(name: "Change \(name)", coalescingKey: "style-\(key)-\(field)") { $0.styles[key] = newStyle })
+        editor.perform(ModifyTimeline(name: "Change \(name)", coalescingKey: field.map { "style-\(key)-\($0)" }) { $0.styles[key] = newStyle })
     }
 
     /// Moves the style's anchor and every item using it (titles and captions are placed from their style).

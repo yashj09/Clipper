@@ -192,7 +192,8 @@ extension AppModel {
         do {
             let image = try await StillRenderer.still(of: asset, at: sourceTime)
             let dir = library.mediaURL.appendingPathComponent("Stills", isDirectory: true)
-            let url = dir.appendingPathComponent("\(asset.name) \(String(format: "%.2f", sourceTime.seconds))s.png")
+            // Unique per freeze: two assets can share a name, and an overwritten file would change earlier freezes.
+            let url = dir.appendingPathComponent("\(asset.name) \(String(format: "%.2f", sourceTime.seconds))s \(UUID().uuidString.prefix(8)).png")
             try StillRenderer.writePNG(image, to: url)
             guard let still = try await library.importMedia([url], mode: .reference, probe: { try await MediaProbe.makeAsset($0) }).first else { return }
             editor.assets[still.id] = still

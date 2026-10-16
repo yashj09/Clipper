@@ -82,11 +82,36 @@ public enum CompositionBuilder {
             let items = track.items.filter(\.enabled)
             for (index, item) in items.enumerated() {
                 let incoming = Transitions.resolve(item, after: index > 0 ? items[index - 1] : nil, rate: timeline.canvas.frameRate)
+                let at = item.start.cmTime
+
+                // The outgoing clip keeps playing under the incoming item for the transition — whatever the incoming item
+                // is (a clip, a still, a freeze frame, a title).
+                if let incoming, let previous = incoming.outgoing, case .media(let prevRef) = previous.content,
+                   let prevAsset = assets[prevRef.asset] {
+                    let prevSrc = try await loader.tracks(sourceURL(prevAsset))
+                    let tail = Transitions.tailSource(prevRef, assetDuration: prevAsset.info.duration, frameRate: prevAsset.info.frameRate,
+                                                      length: incoming.duration)
+                    let d = incoming.duration.cmTime
+                    if track.kind.isVisual, !track.hidden, prevAsset.info.hasVideo, let v = prevSrc.video {
+                        if tailVideo == nil { tailVideo = comp.addMutableTrack(withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid) }
+                        try tailVideo!.insertTimeRange(tail.range.cmTimeRange, of: v, at: at)
+                        if tail.range.duration.cmTime != d { tailVideo!.scaleTimeRange(CMTimeRange(start: at, duration: tail.range.duration.cmTime), toDuration: d) }
+                        tailTrackOf[item.id] = tailVideo!.trackID
+                    }
+                    // Audio crossfade, only from real media (a held last frame has no sound to continue).
+                    if !tail.isHold, track.kind.hasAudio, prevRef.useAudio, !track.muted, let a = prevSrc.audio {
+                        if tailAudio == nil { tailAudio = comp.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid) }
+                        try tailAudio!.insertTimeRange(tail.range.cmTimeRange, of: a, at: at)
+                        if tail.range.duration.cmTime != d { tailAudio!.scaleTimeRange(CMTimeRange(start: at, duration: tail.range.duration.cmTime), toDuration: d) }
+                        let g = previous.gain.value(at: previous.range.duration) + track.gain
+                        tailVolume.ramp(CMTimeRange(start: at, duration: d), from: Float(pow(10, g / 20)), to: 0)
+                    }
+                }
+
                 guard case .media(let ref) = item.content else { continue }
                 guard let asset = assets[ref.asset] else { throw BuildError.missingAsset(ref.asset) }
                 let src = try await loader.tracks(sourceURL(asset))
                 let sourceRange = ref.source.cmTimeRange
-                let at = item.start.cmTime
                 let placed = item.range.duration.cmTime
                 // The item's audio fades in over its transition.
                 var heard = item
@@ -103,28 +128,6 @@ public enum CompositionBuilder {
                     try compAudio!.insertTimeRange(sourceRange, of: a, at: at)
                     if ref.speed != 1 { compAudio!.scaleTimeRange(CMTimeRange(start: at, duration: sourceRange.duration), toDuration: placed) }
                     volume.add(item: heard, trackGain: track.gain)
-                }
-
-                // The outgoing clip keeps playing under the incoming one for the transition.
-                guard let incoming, let previous = incoming.outgoing, case .media(let prevRef) = previous.content,
-                      let prevAsset = assets[prevRef.asset] else { continue }
-                let prevSrc = try await loader.tracks(sourceURL(prevAsset))
-                let tail = Transitions.tailSource(prevRef, assetDuration: prevAsset.info.duration, frameRate: prevAsset.info.frameRate,
-                                                  length: incoming.duration)
-                let d = incoming.duration.cmTime
-                if track.kind.isVisual, !track.hidden, prevAsset.info.hasVideo, let v = prevSrc.video {
-                    if tailVideo == nil { tailVideo = comp.addMutableTrack(withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid) }
-                    try tailVideo!.insertTimeRange(tail.range.cmTimeRange, of: v, at: at)
-                    if tail.range.duration.cmTime != d { tailVideo!.scaleTimeRange(CMTimeRange(start: at, duration: tail.range.duration.cmTime), toDuration: d) }
-                    tailTrackOf[item.id] = tailVideo!.trackID
-                }
-                // Audio crossfade, only from real media (a held last frame has no sound to continue).
-                if !tail.isHold, track.kind.hasAudio, prevRef.useAudio, !track.muted, let a = prevSrc.audio {
-                    if tailAudio == nil { tailAudio = comp.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid) }
-                    try tailAudio!.insertTimeRange(tail.range.cmTimeRange, of: a, at: at)
-                    if tail.range.duration.cmTime != d { tailAudio!.scaleTimeRange(CMTimeRange(start: at, duration: tail.range.duration.cmTime), toDuration: d) }
-                    let g = previous.gain.value(at: previous.range.duration) + track.gain
-                    tailVolume.ramp(CMTimeRange(start: at, duration: d), from: Float(pow(10, g / 20)), to: 0)
                 }
             }
             for (compTrack, automation) in [(compAudio, volume), (tailAudio, tailVolume)] {

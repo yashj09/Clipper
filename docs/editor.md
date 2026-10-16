@@ -12,6 +12,20 @@ The automatic draft gets you most of the way. This page covers the tools for the
 - **Timeline** (bottom). Tracks from top to bottom: captions, titles, overlays, the main video, then audio and music. Right-click a **track header** to rename, add or delete tracks.
 - **Editing panel** (right, full height), with four tabs, described below.
 
+## In the viewer
+
+Work on the picture directly, as in Premiere's Program Monitor:
+
+- **Select**: click a clip, still, title or caption in the viewer. The topmost item under the pointer is selected.
+- **Move**: drag it. It snaps to the centre lines.
+- **Resize**: drag a corner, or pinch on the trackpad.
+- **Zoom inside its frame** (punch in, keeping the box): ⌥-drag a corner.
+- **Rotate**: drag the round handle. ⇧ snaps to 15° steps.
+- **Frame menu** (the dashed-rectangle button next to the timecode): Fill the Frame, Fit in the Frame, or reset position, size and rotation.
+- **Deselect**: click empty picture.
+
+Changes are ordinary undoable edits. If a property already has keyframes, dragging sets a keyframe at the playhead.
+
 ## The editing panel
 
 ### Clip (Effect Controls)

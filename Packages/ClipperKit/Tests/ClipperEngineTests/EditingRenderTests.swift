@@ -107,6 +107,20 @@ import Testing
         #expect(Pixels.psnr(after, try await Self.frame([Self.clip(b, 2, 4)], [b], at: 3.5)) > 40)
     }
 
+    @Test func dissolveIntoAStillKeepsTheOutgoingClip() async throws {
+        guard let (a, b) = try await Self.assets() else { return }
+        let png = Fixture.out("dissolve-still.png")
+        try StillRenderer.writePNG(try await StillRenderer.still(of: b, at: RationalTime(seconds: 1)), to: png)
+        let still = try await MediaProbe.makeAsset(png)
+        var incoming = Item(range: TimeRange(seconds: 2, 4), content: .image(still.id))
+        incoming.transition = Transition(.crossDissolve, duration: RationalTime(seconds: 1))
+        let mixed = try await Self.frame([Self.clip(a, 0, 2), incoming], [a, still], at: 2.5)
+        let outgoing = try await Self.frame([Self.clip(a, 0, 3)], [a], at: 2.5)
+        let alone = try await Self.frame([Item(range: TimeRange(seconds: 2, 4), content: .image(still.id))], [still], at: 2.5)
+        let m = Pixels.mean(mixed, Self.all), e = (Pixels.mean(outgoing, Self.all) + Pixels.mean(alone, Self.all)) / 2
+        #expect(max(abs(m.x - e.x), abs(m.y - e.y), abs(m.z - e.z)) < 0.04, "half-way into a still: \(m) vs \(e)")
+    }
+
     @Test func dipToBlackIsBlackHalfWay() async throws {
         guard let (a, b) = try await Self.assets() else { return }
         var incoming = Self.clip(b, 2, 4)
@@ -128,5 +142,35 @@ import Testing
         try StillRenderer.writePNG(image, to: out)
         let probed = try await MediaProbe.makeAsset(out)
         #expect(probed.info.kind == .image && probed.info.displayWidth == image.width)
+    }
+}
+
+@Suite struct ViewerGeometryTests {
+    @Test func quadsAndHitTesting() {
+        let asset = MediaAsset(key: AssetKey("a"), name: "A", url: URL(fileURLWithPath: "/tmp/a.mov"),
+                               info: MediaInfo(kind: .video, duration: RationalTime(seconds: 10), naturalWidth: 1920, naturalHeight: 1080))
+        var overlay = Item(range: TimeRange(seconds: 0, 5), content: .media(MediaRef(asset: asset.id, source: TimeRange(seconds: 0, 5))))
+        overlay.transform.box = NormSize(0.5, 0.25)
+        overlay.transform.position = .constant(NormPoint(0.25, 0.25))
+        let base = Item(range: TimeRange(seconds: 0, 5), content: .media(MediaRef(asset: asset.id, source: TimeRange(seconds: 0, 5))))
+        let tl = Timeline(name: "T", canvas: .vertical1080, tracks: [Track(kind: .video, items: [base]), Track(kind: .overlay, items: [overlay])])
+        let assets = [asset.id: asset]
+        let q = ViewerGeometry.quad(of: overlay, in: tl, assets: assets, at: RationalTime(seconds: 1))!
+        #expect(q[0] == SIMD2(0, 240) && q[3] == SIMD2(540, 720))
+        // The overlay is on top where it is; elsewhere the full-frame base clip is hit.
+        #expect(ViewerGeometry.item(at: SIMD2(270, 480), in: tl, assets: assets, time: RationalTime(seconds: 1))?.id == overlay.id)
+        #expect(ViewerGeometry.item(at: SIMD2(800, 1500), in: tl, assets: assets, time: RationalTime(seconds: 1))?.id == base.id)
+        #expect(ViewerGeometry.item(at: SIMD2(800, 1500), in: tl, assets: assets, time: RationalTime(seconds: 7)) == nil)
+        // Rotated quads.
+        let diamond = [SIMD2(50.0, 0), SIMD2(100.0, 50), SIMD2(0.0, 50), SIMD2(50.0, 100)]
+        #expect(ViewerGeometry.contains(diamond, SIMD2(50, 50)) && !ViewerGeometry.contains(diamond, SIMD2(5, 5)))
+    }
+
+    @Test func assigningRespectsKeyframes() {
+        let half = RationalTime(value: 1, scale: 60)
+        #expect(Param.constant(1.0).assigning(2, at: RationalTime(seconds: 1), tolerance: half) == .constant(2))
+        let animated = Param.constant(1.0).setting(1, at: .zero, tolerance: half).setting(3, at: RationalTime(seconds: 2), tolerance: half)
+        let out = animated.assigning(5, at: RationalTime(seconds: 1), tolerance: half)
+        #expect(out.keys.count == 3 && out.value(at: RationalTime(seconds: 1)) == 5)
     }
 }

@@ -125,8 +125,10 @@ public final class ClipperCompositor: NSObject, AVVideoCompositing, @unchecked S
             switch layer.source { case .media, .image: adjustable = true; default: break }
             if adjustable, !layer.color.isNone {
                 let c = layer.color
-                uniforms.adjustA = SIMD4(Float(c.exposure), Float(c.contrast), Float(c.highlights), Float(c.shadows))
-                uniforms.adjustB = SIMD4(Float(c.saturation), Float(c.temperature), Float(c.tint), 1)
+                // Clamped: hand-edited documents could hold anything, and exp2 of a large exposure overflows to inf.
+                func k(_ v: Double, _ r: Double) -> Float { Float(min(max(v.isFinite ? v : 0, -r), r)) }
+                uniforms.adjustA = SIMD4(k(c.exposure, 5), k(c.contrast, 1), k(c.highlights, 1), k(c.shadows, 1))
+                uniforms.adjustB = SIMD4(k(c.saturation, 1), k(c.temperature, 1), k(c.tint, 1), 1)
             }
             if layer.blend != blend {
                 blend = layer.blend

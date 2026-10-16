@@ -78,6 +78,7 @@ extension Timeline {
         } else if range.start > item.start && range.end < item.end {
             var tail = item.trimmedStart(to: range.end)
             tail.id = context.makeID()
+            tail.transition = nil
             tracks[ti].items[ii] = item.trimmedEnd(to: range.start)
             tracks[ti].items.append(tail)
         } else if range.start <= item.start {
@@ -303,6 +304,7 @@ public struct Blade: EditCommand {
             guard !item.locked else { continue }
             var tail = item.trimmedStart(to: at)
             tail.id = context.makeID()
+            tail.transition = nil
             t.tracks[ti].items[ii] = item.trimmedEnd(to: at)
             t.tracks[ti].items.insert(tail, at: ii + 1)
             did = true

@@ -76,3 +76,22 @@ import Testing
         #expect(out.markers.count == 1)
     }
 }
+
+@Suite struct ReviewRoundTwoTests {
+    @Test func detachRefusesLockedAndSplitsDontCopyTransitions() throws {
+        var (tl, asset, a, b, _, _) = makeTimeline()
+        tl.tracks[0].items[0].locked = true
+        #expect(throws: EditError.itemLocked(a)) { try DetachAudio(a).apply(to: tl, context: ctx(asset)) }
+        tl.tracks[0].items[1].transition = Transition(.crossDissolve, duration: RationalTime(seconds: 0.5))
+        let split = try Blade(at: RationalTime(seconds: 6)).apply(to: tl, context: ctx(asset))
+        let pieces = split.tracks[0].items.filter { $0.start >= RationalTime(seconds: 4) }
+        #expect(pieces.count == 2 && pieces[0].id == b && pieces[0].transition != nil && pieces[1].transition == nil)
+    }
+
+    @Test func sourceTimeIsExactAtOddSpeeds() {
+        let item = Item(range: TimeRange(start: .zero, duration: RationalTime(value: 30, scale: 30)),
+                        content: .media(MediaRef(asset: UUID(), source: TimeRange(seconds: 0, 1.37), speed: 1.37)))
+        let t = item.sourceTime(at: RationalTime(value: 17, scale: 30))!
+        #expect(abs(t.seconds - 17.0 / 30 * 1.37) < 1e-4)
+    }
+}

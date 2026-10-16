@@ -324,7 +324,7 @@ public struct Item: Codable, Sendable, Equatable, Identifiable {
     /// Maps a timeline time inside this item to source media time (for `.media` items).
     public func sourceTime(at timelineTime: RationalTime) -> RationalTime? {
         guard let m = content.mediaRef else { return nil }
-        return m.source.start + (timelineTime - range.start) * m.speed
+        return m.source.start + (timelineTime - range.start).timesSpeed(m.speed)
     }
 }
 

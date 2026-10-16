@@ -104,6 +104,7 @@ public struct InsertEdit: EditCommand {
                 guard !spanning.locked else { throw EditError.itemLocked(spanning.id) }
                 var tail = spanning.trimmedStart(to: at)
                 tail.id = context.makeID()
+                tail.transition = nil   // the cut belongs to the head; the tail continues from it
                 t.tracks[k].items[s] = spanning.trimmedEnd(to: at)
                 t.tracks[k].items.insert(tail, at: s + 1)
             }
@@ -304,6 +305,7 @@ public struct DetachAudio: EditCommand {
         guard let loc = t.locate(id) else { throw EditError.itemNotFound(id) }
         _ = try t.requireUnlockedTrack(t.tracks[loc.track].id)
         var video = t.tracks[loc.track].items[loc.item]
+        guard !video.locked else { throw EditError.itemLocked(id) }
         guard t.tracks[loc.track].kind.isVisual, case .media(var ref) = video.content, ref.useAudio else { throw EditError.nothingToDo }
         var audio = Item(id: audioID, name: video.name + " (audio)", range: video.range, content: .media(ref),
                          gain: video.gain, fadeIn: video.fadeIn, fadeOut: video.fadeOut)

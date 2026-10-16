@@ -62,7 +62,7 @@ struct ColorInspector: View {
                 Slider(value: Binding(get: { value }, set: { v in set(targets, label, coalesce: key) { change(&$0, v) } }), in: range) { e in
                     if !e { editor.endGesture() }
                 }
-                NumberField(value: value) { v in set(targets, label) { change(&$0, v) } }
+                NumberField(value: value) { v in let c = min(max(v, range.lowerBound), range.upperBound); set(targets, label) { change(&$0, c) } }
                 Button { set(targets, "Reset \(label)") { change(&$0, 0) } } label: { Image(systemName: "arrow.uturn.backward") }
                     .buttonStyle(.borderless).disabled(value == 0).help("Reset \(label)")
             }
@@ -156,14 +156,13 @@ struct CaptionsInspector: View {
             }
             .buttonStyle(.borderless).font(.caption.monospacedDigit())
             .foregroundStyle(selected ? Color.accentColor : .secondary)
-            TextField("", text: Binding(get: { c.text }, set: { v in
+            LiveTextField(title: "", value: c.text) { v in
                 editor.perform(ModifyItem(item.id, name: "Edit Caption", coalescingKey: "\(item.id)-caption") { item in
                     guard case .caption(var cap) = item.content else { return }
                     cap.words = ClipInspector.retime(cap.words, to: v.split(separator: " ").map(String.init))
                     item.content = .caption(cap)
                 })
-            }), axis: .vertical)
-            .lineLimit(1...3)
+            }
             Button { editor.perform(DeleteItems([item.id], ripple: false)) } label: { Image(systemName: "minus.circle") }
                 .buttonStyle(.borderless).help("Delete this caption")
         })
@@ -171,7 +170,8 @@ struct CaptionsInspector: View {
 
     private func resplit(_ track: Track, _ key: String) {
         guard let style = editor.timeline.styles[key] else { return }
-        let pages = CaptionPaging.repage(track.items, styleName: key, style: style, rate: editor.timeline.canvas.frameRate)
+        let pages = CaptionPaging.repage(track.items, styleName: key, style: style, rate: editor.timeline.canvas.frameRate,
+                                         seed: track.id.uuidString)
         let id = track.id
         editor.perform(ModifyTimeline(name: "Re-split Captions") { t in
             guard let i = t.trackIndex(id) else { return }

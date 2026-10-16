@@ -70,14 +70,13 @@ struct ClipInspector: View {
             Section("Text style") { StyleEditor(editor: editor, styleKey: t.style, target: .text, itemID: item.id) }
         case .caption(let c):
             Section("Caption") {
-                TextField("Words", text: Binding(get: { c.text }, set: { v in
+                LiveTextField(title: "Words", value: c.text) { v in
                     modify("Edit Caption", key: "caption") { item in
                         guard case .caption(var cap) = item.content else { return }
                         cap.words = Self.retime(cap.words, to: v.split(separator: " ").map(String.init))
                         item.content = .caption(cap)
                     }
-                }), axis: .vertical)
-                .lineLimit(1...4)
+                }
                 StylePicker(editor: editor, selection: c.style) { s in modify("Change Caption Style") { if case .caption(var cap) = $0.content { cap.style = s; $0.content = .caption(cap) } } }
             }
             Section("Caption style") { StyleEditor(editor: editor, styleKey: c.style, target: .captions, itemID: item.id) }
@@ -116,7 +115,7 @@ struct ClipInspector: View {
             HStack {
                 Button("Split at Playhead") { editor.bladeAtPlayhead() }
                 if case .media(let ref) = item.content, isVisual {
-                    Button("Freeze Frame") { model.perform(.freezeFrame) }.help("Insert a 2-second still of the frame at the playhead")
+                    Button("Freeze Frame") { Task { await model.freezeFrame() } }.help("Insert a 2-second still of the frame at the playhead (⇧F)")
                     if ref.useAudio { Button("Detach Audio") { editor.run(.detachAudio) }.help("Move this clip's sound to its own audio track") }
                 }
             }
@@ -422,6 +421,27 @@ struct NumberField: View {
     }
 
     static func format(_ v: Double) -> String { String(format: abs(v) >= 100 ? "%.0f" : "%.2f", v) }
+}
+
+/// A text field for words that get re-split on every change (captions): what's typed is kept as typed while the field
+/// has focus — a trailing space would otherwise vanish when the words are joined back — and refreshed from the model
+/// otherwise (undo, edits elsewhere).
+struct LiveTextField: View {
+    let title: String
+    let value: String
+    let set: (String) -> Void
+    @State private var text = ""
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        TextField(title, text: $text, axis: .vertical)
+            .lineLimit(1...4)
+            .focused($focused)
+            .onAppear { text = value }
+            .onChange(of: text) { if focused, text != value { set(text) } }
+            .onChange(of: value) { if !focused { text = value } }
+            .onChange(of: focused) { if !focused { text = value } }
+    }
 }
 
 /// Seconds, committed on Return.

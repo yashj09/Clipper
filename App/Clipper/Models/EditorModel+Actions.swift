@@ -146,7 +146,7 @@ extension EditorModel {
             let enable = !items.allSatisfy(\.enabled)
             perform(Batch(items.map { ModifyItem($0.id, name: "") { $0.enabled = enable } }, name: enable ? "Enable" : "Disable"))
         case .detachAudio:
-            guard let item = selectedItems.first ?? clipAtPlayhead() else { return NSSound.beep() }
+            guard let item = selectedItems.min(by: { $0.start < $1.start }) ?? clipAtPlayhead() else { return NSSound.beep() }
             perform(DetachAudio(item.id))
         case .addTransition:
             let targets = selectedItems.isEmpty ? clipAtPlayhead().map { [$0] } ?? [] : selectedItems
