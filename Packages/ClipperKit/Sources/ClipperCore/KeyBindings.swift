@@ -89,13 +89,14 @@ public enum EditorAction: String, Sendable, CaseIterable, Identifiable {
     case previousFrame, nextFrame, back10Frames, forward10Frames
     case previousEdit, nextEdit, goToStart, goToEnd
     // Marking
-    case setIn, setOut, clearInOut, selectClipRange
+    case setIn, setOut, clearInOut, selectClipRange, addMarker, previousMarker, nextMarker
     // Editing
     case blade, bladeAllTracks, delete, rippleDelete, deleteLeavingGap
     case trimStartToPlayhead, trimEndToPlayhead, nudgeLeft, nudgeRight
     case selectClipAtPlayhead, selectAll, deselectAll
     case cut, copy, paste, duplicate
-    case toggleLock, undo, redo
+    case toggleLock, toggleEnabled, undo, redo
+    case freezeFrame, detachAudio, addTransition
     // Adding
     case addText, connectToTimeline, insertAtPlayhead, appendToStoryline, overwriteAtPlayhead
     // View
@@ -114,10 +115,10 @@ public enum EditorAction: String, Sendable, CaseIterable, Identifiable {
         switch self {
         case .playPause, .shuttleBackward, .pause, .shuttleForward, .previousFrame, .nextFrame, .back10Frames,
              .forward10Frames, .previousEdit, .nextEdit, .goToStart, .goToEnd: .playback
-        case .setIn, .setOut, .clearInOut, .selectClipRange: .marking
+        case .setIn, .setOut, .clearInOut, .selectClipRange, .addMarker, .previousMarker, .nextMarker: .marking
         case .blade, .bladeAllTracks, .delete, .rippleDelete, .deleteLeavingGap, .trimStartToPlayhead, .trimEndToPlayhead,
              .nudgeLeft, .nudgeRight, .selectClipAtPlayhead, .selectAll, .deselectAll, .cut, .copy, .paste, .duplicate,
-             .toggleLock, .undo, .redo: .editing
+             .toggleLock, .toggleEnabled, .undo, .redo, .freezeFrame, .detachAudio, .addTransition: .editing
         case .addText, .connectToTimeline, .insertAtPlayhead, .appendToStoryline, .overwriteAtPlayhead: .adding
         case .zoomIn, .zoomOut, .zoomToFit, .toggleSnapping, .toggleRipple: .view
         case .importMedia, .newDraft, .export: .file
@@ -142,6 +143,13 @@ public enum EditorAction: String, Sendable, CaseIterable, Identifiable {
         case .setOut: "Set Out Point"
         case .clearInOut: "Clear In and Out"
         case .selectClipRange: "Mark the Clip Under the Playhead"
+        case .addMarker: "Add Marker"
+        case .previousMarker: "Go to Previous Marker"
+        case .nextMarker: "Go to Next Marker"
+        case .toggleEnabled: "Enable / Disable Selection"
+        case .freezeFrame: "Insert Freeze Frame at Playhead"
+        case .detachAudio: "Detach Audio"
+        case .addTransition: "Add Cross Dissolve"
         case .blade: "Split at Playhead"
         case .bladeAllTracks: "Split All Tracks at Playhead"
         case .delete: "Delete (follows the Ripple setting)"
@@ -197,6 +205,13 @@ public enum EditorAction: String, Sendable, CaseIterable, Identifiable {
         case .setOut: return [k("o")]
         case .clearInOut: return [k("x", .option)]
         case .selectClipRange: return [k("x")]
+        case .addMarker: return [k("m")]
+        case .previousMarker: return [k("m", .option)]
+        case .nextMarker: return [k("m", .shift)]
+        case .toggleEnabled: return [k("e", .shift)]
+        case .freezeFrame: return [k("f", .shift)]
+        case .detachAudio: return []
+        case .addTransition: return [k("d", .shift)]
         case .blade: return [k("b"), k("k", .command)]
         case .bladeAllTracks: return [k("b", .shift)]
         case .delete: return [k("delete"), k("forwardDelete")]

@@ -33,13 +33,38 @@ public struct RenderLayer: Sendable {
     public var duration: RationalTime
     public var fadeIn: RationalTime
     public var fadeOut: RationalTime
+    public var color: ColorAdjust = .none
+    public var blend: BlendMode = .normal
+    /// Transition opacity: (timeline seconds, multiplier) points, linear between them and held beyond. Empty = 1.
+    public var envelope: [OpacityEnvelope.Point] = []
 
-    /// Opacity including fades at item-relative time `t`.
+    /// Opacity including fades and transitions at item-relative time `t`.
     public func effectiveOpacity(at t: RationalTime) -> Double {
         var o = opacity.value(at: t)
         if fadeIn > .zero { o *= min(max(t.seconds / fadeIn.seconds, 0), 1) }
         if fadeOut > .zero { o *= min(max((duration - t).seconds / fadeOut.seconds, 0), 1) }
+        if !envelope.isEmpty { o *= OpacityEnvelope.value(envelope, at: (start + t).seconds) }
         return o
+    }
+}
+
+/// Piecewise-linear opacity over timeline time (used by transitions).
+public enum OpacityEnvelope {
+    public struct Point: Sendable, Equatable {
+        public var time: Double
+        public var value: Double
+        public init(_ time: Double, _ value: Double) { self.time = time; self.value = value }
+    }
+
+    public static func value(_ points: [Point], at t: Double) -> Double {
+        guard let first = points.first, let last = points.last else { return 1 }
+        if t <= first.time { return first.value }
+        if t >= last.time { return last.value }
+        for (a, b) in zip(points, points.dropFirst()) where t <= b.time {
+            let span = b.time - a.time
+            return span > 0 ? a.value + (b.value - a.value) * (t - a.time) / span : b.value
+        }
+        return last.value
     }
 }
 

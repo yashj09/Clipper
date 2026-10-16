@@ -104,6 +104,7 @@ public struct InsertEdit: EditCommand {
                 guard !spanning.locked else { throw EditError.itemLocked(spanning.id) }
                 var tail = spanning.trimmedStart(to: at)
                 tail.id = context.makeID()
+                tail.transition = nil   // the cut belongs to the head; the tail continues from it
                 t.tracks[k].items[s] = spanning.trimmedEnd(to: at)
                 t.tracks[k].items.insert(tail, at: s + 1)
             }
@@ -255,6 +256,94 @@ public struct SetStyle: EditCommand {
     public func apply(to timeline: Timeline, context: EditContext) throws -> Timeline {
         var t = timeline
         t.styles[key] = style
+        return t
+    }
+}
+
+/// Any change to the timeline as a whole (markers, name, loudness, track list), validated like other edits.
+public struct ModifyTimeline: EditCommand {
+    public var name: String
+    public var coalescingKey: String?
+    public var change: @Sendable (inout Timeline) throws -> Void
+    public init(name: String, coalescingKey: String? = nil, _ change: @escaping @Sendable (inout Timeline) throws -> Void) {
+        self.name = name; self.coalescingKey = coalescingKey; self.change = change
+    }
+    public func apply(to timeline: Timeline, context: EditContext) throws -> Timeline {
+        var t = timeline
+        try change(&t)
+        return t
+    }
+}
+
+/// Switches the video's frame (orientation/aspect): 9:16 ↔ 16:9 ↔ 1:1 ↔ 4:5. Layout is normalized, so clips re-fit their
+/// boxes to the new shape (fill re-crops around each clip's focus, which reframing keyframes keep on the speaker) and text
+/// keeps its relative position.
+public struct ChangeCanvas: EditCommand {
+    public var canvas: Canvas
+    public init(_ canvas: Canvas) { self.canvas = canvas }
+    public var name: String { "Change Frame" }
+    public func apply(to timeline: Timeline, context: EditContext) throws -> Timeline {
+        guard canvas.width >= 16, canvas.height >= 16, canvas.width % 2 == 0, canvas.height % 2 == 0 else {
+            throw EditError.invalidRange("frame \(canvas.width)×\(canvas.height)")
+        }
+        guard canvas != timeline.canvas else { throw EditError.nothingToDo }
+        var t = timeline
+        t.canvas = canvas
+        return t
+    }
+}
+
+/// Splits a clip's sound onto an audio track (Premiere's Unlink): the clip goes silent and an audio item with the same
+/// source, timing, volume and fades is placed under it, so either can then be moved or trimmed on its own.
+public struct DetachAudio: EditCommand {
+    public var id: ItemID
+    public var audioID: ItemID
+    public init(_ id: ItemID, audioID: ItemID = UUID()) { self.id = id; self.audioID = audioID }
+    public var name: String { "Detach Audio" }
+    public func apply(to timeline: Timeline, context: EditContext) throws -> Timeline {
+        var t = timeline
+        guard let loc = t.locate(id) else { throw EditError.itemNotFound(id) }
+        _ = try t.requireUnlockedTrack(t.tracks[loc.track].id)
+        var video = t.tracks[loc.track].items[loc.item]
+        guard !video.locked else { throw EditError.itemLocked(id) }
+        guard t.tracks[loc.track].kind.isVisual, case .media(var ref) = video.content, ref.useAudio else { throw EditError.nothingToDo }
+        var audio = Item(id: audioID, name: video.name + " (audio)", range: video.range, content: .media(ref),
+                         gain: video.gain, fadeIn: video.fadeIn, fadeOut: video.fadeOut)
+        audio.enabled = video.enabled
+        ref.useAudio = false
+        video.content = .media(ref)
+        t.tracks[loc.track].items[loc.item] = video
+        return try PlaceItems([.init(audio, kinds: [.audio])], name: name).apply(to: t, context: context)
+    }
+}
+
+/// Gives every caption (or every text item) the same style — "apply to all captions / all titles".
+public struct ApplyStyleToAll: EditCommand {
+    public enum Target: Sendable { case captions, text }
+    public var target: Target
+    public var style: String
+    /// Also move them to the style's position (captions and titles are placed from their style when made).
+    public var reposition: Bool
+    public init(_ target: Target, style: String, reposition: Bool = true) { self.target = target; self.style = style; self.reposition = reposition }
+    public var name: String { target == .captions ? "Apply Style to All Captions" : "Apply Style to All Text" }
+
+    public func apply(to timeline: Timeline, context: EditContext) throws -> Timeline {
+        guard let s = timeline.styles[style] else { throw EditError.invalidRange("unknown style \(style)") }
+        var t = timeline
+        var changed = false
+        for ti in t.tracks.indices where !t.tracks[ti].locked {
+            for ii in t.tracks[ti].items.indices where !t.tracks[ti].items[ii].locked {
+                var item = t.tracks[ti].items[ii]
+                switch (target, item.content) {
+                case (.captions, .caption(var c)): c.style = style; item.content = .caption(c)
+                case (.text, .text(var x)): x.style = style; item.content = .text(x)
+                default: continue
+                }
+                if reposition { item.transform.position = .constant(s.position) }
+                if item != t.tracks[ti].items[ii] { t.tracks[ti].items[ii] = item; changed = true }
+            }
+        }
+        guard changed else { throw EditError.nothingToDo }
         return t
     }
 }

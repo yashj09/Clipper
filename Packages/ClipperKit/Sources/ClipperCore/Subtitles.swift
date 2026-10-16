@@ -119,7 +119,7 @@ public enum Subtitles {
     static func cues(_ tracks: [Track]) -> [Cue] {
         tracks.flatMap { track in
             track.items.compactMap { item -> Cue? in
-                guard case .caption(let c) = item.content, !c.words.isEmpty else { return nil }
+                guard item.enabled, case .caption(let c) = item.content, !c.words.isEmpty else { return nil }
                 return Cue(start: item.start.seconds, end: item.end.seconds,
                            text: CaptionLanguage.join(c.words.map(\.text), language: track.language))
             }

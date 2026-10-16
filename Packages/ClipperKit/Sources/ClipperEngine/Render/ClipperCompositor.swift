@@ -58,7 +58,8 @@ public final class ClipperCompositor: NSObject, AVVideoCompositing, @unchecked S
         guard let cmd = gpu.queue.makeCommandBuffer(), let enc = cmd.makeRenderCommandEncoder(descriptor: pass) else {
             throw CocoaError(.featureUnsupported)
         }
-        enc.setRenderPipelineState(gpu.pipeline)
+        var blend = BlendMode.normal
+        enc.setRenderPipelineState(gpu.pipelines[blend]!)
         if canvasFrame.isLetterboxed {
             // Keep layers that extend past the canvas edge out of the bars, as the preview clips them at the canvas.
             enc.setScissorRect(MTLScissorRect(x: Int(canvasFrame.origin.x), y: Int(canvasFrame.origin.y),
@@ -120,9 +121,24 @@ public final class ClipperCompositor: NSObject, AVVideoCompositing, @unchecked S
             }
 
             var uniforms = LayerUniforms()
-            let ndc = geometry.corners.map { $0 + canvasFrame.origin }
+            var adjustable = false
+            switch layer.source { case .media, .image: adjustable = true; default: break }
+            if adjustable, !layer.color.isNone {
+                let c = layer.color
+                // Clamped: hand-edited documents could hold anything, and exp2 of a large exposure overflows to inf.
+                func k(_ v: Double, _ r: Double) -> Float { Float(min(max(v.isFinite ? v : 0, -r), r)) }
+                uniforms.adjustA = SIMD4(k(c.exposure, 5), k(c.contrast, 1), k(c.highlights, 1), k(c.shadows, 1))
+                uniforms.adjustB = SIMD4(k(c.saturation, 1), k(c.temperature, 1), k(c.tint, 1), 1)
+            }
+            if layer.blend != blend {
+                blend = layer.blend
+                enc.setRenderPipelineState(gpu.pipelines[blend]!)
+            }
+            let flips = layer.transform
+            let placed = adjustable ? geometry.flipped(horizontally: flips.flipH, vertically: flips.flipV) : geometry
+            let ndc = placed.corners.map { $0 + canvasFrame.origin }
                 .map { SIMD2<Float>(Float($0.x / outSize.x * 2 - 1), Float(1 - $0.y / outSize.y * 2)) }
-            let r = geometry.sourceRect
+            let r = placed.sourceRect
             let display: [SIMD2<Double>] = [SIMD2(r.x, r.y), SIMD2(r.x + r.width, r.y), SIMD2(r.x, r.y + r.height),
                                             SIMD2(r.x + r.width, r.y + r.height)]
             let uv = display.map { orientation.textureCoordinate($0) }.map { SIMD2<Float>(Float($0.x), Float($0.y)) }
@@ -192,4 +208,6 @@ struct LayerUniforms {
     var texcoord: (SIMD2<Float>, SIMD2<Float>, SIMD2<Float>, SIMD2<Float>) = (.zero, .zero, .zero, .zero)
     var tint = SIMD4<Float>(1, 1, 1, 1)
     var transfer: Int32 = 0
+    var adjustA = SIMD4<Float>(0, 0, 0, 0)
+    var adjustB = SIMD4<Float>(0, 0, 0, 0)
 }

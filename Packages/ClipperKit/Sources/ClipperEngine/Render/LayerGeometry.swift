@@ -48,6 +48,15 @@ public struct LayerGeometry: Equatable, Sendable {
         return LayerGeometry(corners: quadCorners(size: size, transform: tr, at: t, canvas: canvas), sourceRect: .full)
     }
 
+    /// The same quad showing its content mirrored: swapping the corners the texture is drawn to flips it in place.
+    public func flipped(horizontally h: Bool, vertically v: Bool) -> LayerGeometry {
+        guard h || v, corners.count == 4 else { return self }
+        var c = corners
+        if h { c = [c[1], c[0], c[3], c[2]] }
+        if v { c = [c[2], c[3], c[0], c[1]] }
+        return LayerGeometry(corners: c, sourceRect: sourceRect)
+    }
+
     static func quadCorners(size: SIMD2<Double>, transform tr: Transform, at t: RationalTime, canvas: SIMD2<Double>) -> [SIMD2<Double>] {
         let p = tr.position.value(at: t)
         let center = SIMD2(p.x * canvas.x, p.y * canvas.y)

@@ -202,3 +202,12 @@ extension Item {
         return Array(Set(all)).sorted()
     }
 }
+
+extension Param {
+    /// The param after the user sets `value` at item-relative `local`: an animated param gets a keyframe there (the
+    /// playhead must be over the item); a constant one just changes.
+    public func assigning(_ value: Value, at local: RationalTime?, tolerance: RationalTime) -> Param {
+        if isAnimated, let local { return setting(value, at: local, tolerance: tolerance) }
+        return .constant(value)
+    }
+}

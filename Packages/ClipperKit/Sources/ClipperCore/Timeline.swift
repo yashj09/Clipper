@@ -50,15 +50,104 @@ public struct Transform: Codable, Sendable, Equatable {
     /// Static crop of the source before fitting.
     public var crop: NormRect
     public var fit: FitMode
+    /// Mirror the content left↔right / top↔bottom inside its box.
+    public var flipH: Bool
+    public var flipV: Bool
 
     public init(box: NormSize = .full, position: Param<NormPoint> = .constant(.center), scale: Param<Double> = .constant(1),
                 rotation: Param<Double> = .constant(0), zoom: Param<Double> = .constant(1),
-                focus: Param<NormPoint> = .constant(.center), crop: NormRect = .full, fit: FitMode = .fill) {
+                focus: Param<NormPoint> = .constant(.center), crop: NormRect = .full, fit: FitMode = .fill,
+                flipH: Bool = false, flipV: Bool = false) {
         self.box = box; self.position = position; self.scale = scale; self.rotation = rotation
-        self.zoom = zoom; self.focus = focus; self.crop = crop; self.fit = fit
+        self.zoom = zoom; self.focus = focus; self.crop = crop; self.fit = fit; self.flipH = flipH; self.flipV = flipV
     }
 
     public static let fullFrame = Transform()
+
+    private enum CodingKeys: String, CodingKey { case box, position, scale, rotation, zoom, focus, crop, fit, flipH, flipV }
+
+    // Flips are stored only when on, so documents written before they existed decode, and plain ones stay unchanged.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        box = try c.decode(NormSize.self, forKey: .box)
+        position = try c.decode(Param<NormPoint>.self, forKey: .position)
+        scale = try c.decode(Param<Double>.self, forKey: .scale)
+        rotation = try c.decode(Param<Double>.self, forKey: .rotation)
+        zoom = try c.decode(Param<Double>.self, forKey: .zoom)
+        focus = try c.decode(Param<NormPoint>.self, forKey: .focus)
+        crop = try c.decode(NormRect.self, forKey: .crop)
+        fit = try c.decode(FitMode.self, forKey: .fit)
+        flipH = try c.decodeIfPresent(Bool.self, forKey: .flipH) ?? false
+        flipV = try c.decodeIfPresent(Bool.self, forKey: .flipV) ?? false
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(box, forKey: .box); try c.encode(position, forKey: .position); try c.encode(scale, forKey: .scale)
+        try c.encode(rotation, forKey: .rotation); try c.encode(zoom, forKey: .zoom); try c.encode(focus, forKey: .focus)
+        try c.encode(crop, forKey: .crop); try c.encode(fit, forKey: .fit)
+        if flipH { try c.encode(true, forKey: .flipH) }
+        if flipV { try c.encode(true, forKey: .flipV) }
+    }
+}
+
+/// Basic colour correction (Premiere's Lumetri basics), applied after HDR tone mapping. Zero everywhere = untouched.
+public struct ColorAdjust: Codable, Sendable, Equatable, Hashable {
+    /// Stops, −3…3.
+    public var exposure: Double = 0
+    /// −1…1 for every other control.
+    public var contrast: Double = 0
+    public var highlights: Double = 0
+    public var shadows: Double = 0
+    public var saturation: Double = 0
+    /// Warmer (+) or cooler (−) white balance.
+    public var temperature: Double = 0
+    /// Magenta (+) or green (−).
+    public var tint: Double = 0
+
+    public init(exposure: Double = 0, contrast: Double = 0, highlights: Double = 0, shadows: Double = 0, saturation: Double = 0,
+                temperature: Double = 0, tint: Double = 0) {
+        self.exposure = exposure; self.contrast = contrast; self.highlights = highlights; self.shadows = shadows
+        self.saturation = saturation; self.temperature = temperature; self.tint = tint
+    }
+
+    public static let none = ColorAdjust()
+    public var isNone: Bool { self == .none }
+
+    /// One-click starting points ("looks"), refined with the sliders.
+    public static let looks: [(name: String, adjust: ColorAdjust)] = [
+        ("Warm", ColorAdjust(contrast: 0.05, saturation: 0.1, temperature: 0.35, tint: 0.05)),
+        ("Cool", ColorAdjust(contrast: 0.05, temperature: -0.35)),
+        ("Vivid", ColorAdjust(contrast: 0.2, shadows: -0.05, saturation: 0.35)),
+        ("Matte", ColorAdjust(contrast: -0.25, highlights: -0.15, shadows: 0.25, saturation: -0.15)),
+        ("Cinematic", ColorAdjust(contrast: 0.25, highlights: -0.2, shadows: -0.1, saturation: -0.1, temperature: 0.1, tint: -0.05)),
+        ("Bright", ColorAdjust(exposure: 0.4, shadows: 0.15, saturation: 0.05)),
+        ("Black & White", ColorAdjust(contrast: 0.15, saturation: -1)),
+    ]
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self), d = ColorAdjust()
+        exposure = c.value(.exposure, d.exposure); contrast = c.value(.contrast, d.contrast)
+        highlights = c.value(.highlights, d.highlights); shadows = c.value(.shadows, d.shadows)
+        saturation = c.value(.saturation, d.saturation); temperature = c.value(.temperature, d.temperature)
+        tint = c.value(.tint, d.tint)
+    }
+}
+
+/// How a layer combines with what's below it.
+public enum BlendMode: String, Codable, Sendable, CaseIterable {
+    case normal, add, screen, multiply
+}
+
+/// A transition into an item from the one before it on the same track. It starts at the cut: the outgoing clip keeps
+/// playing past its out-point (from its media handle, or its last frame held) while the incoming one fades in.
+public struct Transition: Codable, Sendable, Equatable {
+    public enum Kind: String, Codable, Sendable, CaseIterable {
+        case crossDissolve, dipToBlack, dipToWhite
+    }
+    public var kind: Kind
+    public var duration: RationalTime
+    public init(_ kind: Kind, duration: RationalTime) { self.kind = kind; self.duration = duration }
 }
 
 /// Where an item came from. Automation only replaces `.auto` items that the user hasn't locked.
@@ -173,14 +262,60 @@ public struct Item: Codable, Sendable, Equatable, Identifiable {
     public var locked: Bool
     /// Template slot this item fills, if any.
     public var slot: String?
+    /// Disabled items stay on the timeline but aren't seen or heard (Premiere's Enable).
+    public var enabled: Bool
+    public var color: ColorAdjust
+    public var blend: BlendMode
+    /// Transition from the previous item on the track into this one.
+    public var transition: Transition?
 
     public init(id: ItemID = UUID(), name: String = "", range: TimeRange, content: ItemContent,
                 transform: Transform = .fullFrame, opacity: Param<Double> = .constant(1), gain: Param<Double> = .constant(0),
                 fadeIn: RationalTime = .zero, fadeOut: RationalTime = .zero, origin: Origin = .user,
-                locked: Bool = false, slot: String? = nil) {
+                locked: Bool = false, slot: String? = nil, enabled: Bool = true, color: ColorAdjust = .none,
+                blend: BlendMode = .normal, transition: Transition? = nil) {
         self.id = id; self.name = name; self.range = range; self.content = content; self.transform = transform
         self.opacity = opacity; self.gain = gain; self.fadeIn = fadeIn; self.fadeOut = fadeOut
         self.origin = origin; self.locked = locked; self.slot = slot
+        self.enabled = enabled; self.color = color; self.blend = blend; self.transition = transition
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, range, content, transform, opacity, gain, fadeIn, fadeOut, origin, locked, slot, enabled, color, blend, transition
+    }
+
+    // The editing fields added after the first document version are stored only when they differ from the defaults.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(ItemID.self, forKey: .id)
+        name = try c.decode(String.self, forKey: .name)
+        range = try c.decode(TimeRange.self, forKey: .range)
+        content = try c.decode(ItemContent.self, forKey: .content)
+        transform = try c.decode(Transform.self, forKey: .transform)
+        opacity = try c.decode(Param<Double>.self, forKey: .opacity)
+        gain = try c.decode(Param<Double>.self, forKey: .gain)
+        fadeIn = try c.decode(RationalTime.self, forKey: .fadeIn)
+        fadeOut = try c.decode(RationalTime.self, forKey: .fadeOut)
+        origin = try c.decode(Origin.self, forKey: .origin)
+        locked = try c.decode(Bool.self, forKey: .locked)
+        slot = try c.decodeIfPresent(String.self, forKey: .slot)
+        enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
+        color = try c.decodeIfPresent(ColorAdjust.self, forKey: .color) ?? .none
+        blend = try c.decodeIfPresent(BlendMode.self, forKey: .blend) ?? .normal
+        transition = try c.decodeIfPresent(Transition.self, forKey: .transition)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id); try c.encode(name, forKey: .name); try c.encode(range, forKey: .range)
+        try c.encode(content, forKey: .content); try c.encode(transform, forKey: .transform); try c.encode(opacity, forKey: .opacity)
+        try c.encode(gain, forKey: .gain); try c.encode(fadeIn, forKey: .fadeIn); try c.encode(fadeOut, forKey: .fadeOut)
+        try c.encode(origin, forKey: .origin); try c.encode(locked, forKey: .locked)
+        try c.encodeIfPresent(slot, forKey: .slot)
+        if !enabled { try c.encode(false, forKey: .enabled) }
+        if !color.isNone { try c.encode(color, forKey: .color) }
+        if blend != .normal { try c.encode(blend, forKey: .blend) }
+        try c.encodeIfPresent(transition, forKey: .transition)
     }
 
     public var start: RationalTime { range.start }
@@ -189,7 +324,7 @@ public struct Item: Codable, Sendable, Equatable, Identifiable {
     /// Maps a timeline time inside this item to source media time (for `.media` items).
     public func sourceTime(at timelineTime: RationalTime) -> RationalTime? {
         guard let m = content.mediaRef else { return nil }
-        return m.source.start + (timelineTime - range.start) * m.speed
+        return m.source.start + (timelineTime - range.start).timesSpeed(m.speed)
     }
 }
 
@@ -278,6 +413,14 @@ public struct DraftRecord: Codable, Sendable, Equatable {
     }
 }
 
+/// A named point on the timeline.
+public struct Marker: Codable, Sendable, Equatable, Identifiable {
+    public var id: UUID
+    public var time: RationalTime
+    public var name: String
+    public init(id: UUID = UUID(), time: RationalTime, name: String = "") { self.id = id; self.time = time; self.name = name }
+}
+
 /// The editable document: tracks bottom-to-top (index 0 is drawn first).
 public struct Timeline: Codable, Sendable, Equatable, Identifiable {
     public var id: UUID
@@ -291,11 +434,41 @@ public struct Timeline: Codable, Sendable, Equatable, Identifiable {
     /// Credits required by licences of used media (e.g. CC-BY music).
     public var attributions: [String]
     public var provenance: Provenance?
+    /// Markers (M), sorted by time.
+    public var markers: [Marker]
 
     public init(id: UUID = UUID(), name: String, canvas: Canvas, tracks: [Track] = [], styles: [String: TextStyle] = [:],
-                loudnessTarget: Double? = -14, attributions: [String] = [], provenance: Provenance? = nil) {
+                loudnessTarget: Double? = -14, attributions: [String] = [], provenance: Provenance? = nil, markers: [Marker] = []) {
         self.id = id; self.name = name; self.canvas = canvas; self.tracks = tracks; self.styles = styles
         self.loudnessTarget = loudnessTarget; self.attributions = attributions; self.provenance = provenance
+        self.markers = markers
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, canvas, tracks, styles, loudnessTarget, attributions, provenance, markers
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        name = try c.decode(String.self, forKey: .name)
+        canvas = try c.decode(Canvas.self, forKey: .canvas)
+        tracks = try c.decode([Track].self, forKey: .tracks)
+        styles = try c.decode([String: TextStyle].self, forKey: .styles)
+        loudnessTarget = try c.decodeIfPresent(Double.self, forKey: .loudnessTarget)
+        attributions = try c.decode([String].self, forKey: .attributions)
+        provenance = try c.decodeIfPresent(Provenance.self, forKey: .provenance)
+        markers = try c.decodeIfPresent([Marker].self, forKey: .markers) ?? []
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id); try c.encode(name, forKey: .name); try c.encode(canvas, forKey: .canvas)
+        try c.encode(tracks, forKey: .tracks); try c.encode(styles, forKey: .styles)
+        try c.encodeIfPresent(loudnessTarget, forKey: .loudnessTarget)
+        try c.encode(attributions, forKey: .attributions)
+        try c.encodeIfPresent(provenance, forKey: .provenance)
+        if !markers.isEmpty { try c.encode(markers, forKey: .markers) }
     }
 
     public var duration: RationalTime { tracks.map(\.end).max() ?? .zero }

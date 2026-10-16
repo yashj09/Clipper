@@ -1,6 +1,7 @@
 import AppKit
 import ClipperAutomation
 import ClipperCore
+import ClipperEngine
 import Foundation
 
 /// Keyboard actions and the editor's browser: actions that need more than the open editor (file commands, settings
@@ -49,6 +50,7 @@ extension AppModel {
         case .insertAtPlayhead: addBrowserSelection(.insert)
         case .appendToStoryline: addBrowserSelection(.append)
         case .overwriteAtPlayhead: addBrowserSelection(.overwrite)
+        case .freezeFrame: Task { await freezeFrame() }
         default: editor?.run(action)
         }
     }
@@ -168,5 +170,47 @@ extension AppModel {
         if !result.report.warnings.isEmpty { alert = "Re-drafted.\n\n" + result.report.warnings.map { "⚠️ " + $0 }.joined(separator: "\n") }
         try? await Task.sleep(for: .seconds(3))
         if activity?.detail == note { activity = nil }
+    }
+}
+
+// MARK: Freeze frame
+
+@MainActor
+extension AppModel {
+    /// Inserts a 2-second still of the clip under the playhead (the selected one if it's there), splitting the clip
+    /// and pushing everything after it along (an insert edit, so captions and music stay in sync).
+    func freezeFrame() async {
+        guard let editor, let library else { return }
+        let p = editor.playhead
+        let candidates = editor.selectedItems + [editor.clipAtPlayhead()].compactMap { $0 }
+        guard let item = candidates.first(where: { $0.range.contains(p) && $0.content.mediaRef != nil }),
+              case .media(let ref) = item.content, let asset = editor.assets[ref.asset], asset.info.hasVideo,
+              let track = editor.timeline.tracks.first(where: { $0.items.contains { $0.id == item.id } }),
+              let sourceTime = item.sourceTime(at: p) else { return NSSound.beep() }
+        activity = Activity(title: "Freeze frame", detail: asset.name)
+        defer { activity = nil }
+        do {
+            let image = try await StillRenderer.still(of: asset, at: sourceTime)
+            let dir = library.mediaURL.appendingPathComponent("Stills", isDirectory: true)
+            // Unique per freeze: two assets can share a name, and an overwritten file would change earlier freezes.
+            let url = dir.appendingPathComponent("\(asset.name) \(String(format: "%.2f", sourceTime.seconds))s \(UUID().uuidString.prefix(8)).png")
+            try StillRenderer.writePNG(image, to: url)
+            guard let still = try await library.importMedia([url], mode: .reference, probe: { try await MediaProbe.makeAsset($0) }).first else { return }
+            editor.assets[still.id] = still
+            refresh()
+            let rate = editor.timeline.canvas.frameRate
+            // The still keeps the clip's framing at that moment (keyframed values frozen too).
+            let local = p - item.start
+            var t = item.transform
+            t.position = .constant(item.transform.position.value(at: local)); t.scale = .constant(item.transform.scale.value(at: local))
+            t.rotation = .constant(item.transform.rotation.value(at: local)); t.zoom = .constant(item.transform.zoom.value(at: local))
+            t.focus = .constant(item.transform.focus.value(at: local))
+            var frozen = Item(name: "Freeze — \(asset.name)", range: TimeRange(start: p.roundedToFrame(rate), duration: RationalTime(seconds: 2).roundedToFrame(rate)),
+                              content: .image(still.id), transform: t)
+            frozen.color = item.color
+            if editor.perform(InsertEdit(frozen, on: track.id)) { editor.selection = [frozen.id] }
+        } catch {
+            alert = "Couldn't make the freeze frame: \(error)"
+        }
     }
 }

@@ -78,6 +78,7 @@ extension Timeline {
         } else if range.start > item.start && range.end < item.end {
             var tail = item.trimmedStart(to: range.end)
             tail.id = context.makeID()
+            tail.transition = nil
             tracks[ti].items[ii] = item.trimmedEnd(to: range.start)
             tracks[ti].items.append(tail)
         } else if range.start <= item.start {
@@ -91,7 +92,7 @@ extension Timeline {
 extension RationalTime {
     /// Timeline duration → source duration at `speed`. Frame-aligned times have a small timescale (e.g. 30), where
     /// `* speed` would round by up to half a frame; working at ≥ the default scale keeps the error under 10 µs.
-    func timesSpeed(_ speed: Double) -> RationalTime {
+    public func timesSpeed(_ speed: Double) -> RationalTime {
         speed == 1 ? self : rescaled(to: Swift.max(scale, RationalTime.defaultScale)) * speed
     }
 }
@@ -303,6 +304,7 @@ public struct Blade: EditCommand {
             guard !item.locked else { continue }
             var tail = item.trimmedStart(to: at)
             tail.id = context.makeID()
+            tail.transition = nil
             t.tracks[ti].items[ii] = item.trimmedEnd(to: at)
             t.tracks[ti].items.insert(tail, at: ii + 1)
             did = true

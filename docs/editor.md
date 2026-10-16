@@ -9,8 +9,82 @@ The automatic draft gets you most of the way. This page covers the tools for the
   - **Music**: your music library.
   - **Titles**: text styles.
 - **Viewer** (middle). The preview is rendered by the same compositor as the export.
-- **Inspector** (right). Shows the selected item's properties, or the timeline's when nothing is selected.
-- **Timeline** (bottom). Tracks from top to bottom: captions, titles, overlays, the main video, then audio and music.
+- **Timeline** (bottom). Tracks from top to bottom: captions, titles, overlays, the main video, then audio and music. Right-click a **track header** to rename, add or delete tracks.
+- **Editing panel** (right, full height), with four tabs, described below.
+
+## In the viewer
+
+Work on the picture directly, as in Premiere's Program Monitor:
+
+- **Select**: click a clip, still, title or caption in the viewer. The topmost item under the pointer is selected.
+- **Move**: drag it. It snaps to the centre lines.
+- **Resize**: drag a corner, or pinch on the trackpad.
+- **Zoom inside its frame** (punch in, keeping the box): ⌥-drag a corner.
+- **Rotate**: drag the round handle. ⇧ snaps to 15° steps.
+- **Frame menu** (the dashed-rectangle button next to the timecode): Fill the Frame, Fit in the Frame, or reset position, size and rotation.
+- **Deselect**: click empty picture.
+
+Changes are ordinary undoable edits. If a property already has keyframes, dragging sets a keyframe at the playhead.
+
+## The editing panel
+
+### Clip (Effect Controls)
+
+For the selected clip, title or caption:
+
+| Section | What you can do |
+|---|---|
+| **Clip** | Rename it; type an exact start and duration; **Enabled** (⇧E: a disabled clip stays on the timeline but isn't seen or heard); Locked. Buttons: Split at Playhead, **Freeze Frame** (⇧F), **Detach Audio**. |
+| **Motion** | Position X/Y, scale, rotation and zoom. Each has a ◆ keyframe toggle, a slider and a number field (type a value and press Return). **Fit**: fill, fit or stretch. **Flip** horizontal or vertical. **Reset Motion**. |
+| **Crop** | Left, right, top, bottom. |
+| **Opacity** | Opacity (keyframeable); **blend mode** (normal, add, screen, multiply); fade in and fade out. |
+| **Transition** | Cross dissolve, dip to black, or dip to white from the clip before it on the same track, with a duration. ⇧D adds a 0.5 s cross dissolve. |
+| **Speed** | 25–400 %, plus quick presets. |
+| **Audio** | Clip audio on or off; volume (keyframeable). |
+
+How transitions and freeze frames work:
+
+- **Transitions** start at the cut. The outgoing clip keeps playing past its end, using its spare footage, or holding its last frame if the file has none. Its sound crossfades too.
+- **Freeze Frame** inserts a 2-second still of the frame at the playhead. Everything after it moves along, so captions and music stay in sync.
+
+**Text and caption style** (for a selected title or caption) covers:
+
+- font and weight, and size;
+- text colour, UPPERCASE and alignment;
+- outline (colour and width), shadow, and a background box (colour and padding);
+- position, maximum width and line spacing;
+- for captions only: the spoken-word highlight colour or box, keyword colour, and animation.
+
+Styles are shared by name. You choose where a change goes:
+
+- **All N captions with "bold-pop"** (the default) changes every item that uses the style.
+- **Only this caption** gives just this item its own copy of the style.
+
+**Use "…" for all captions/text** gives every caption (or every title) this exact look and position.
+
+### Color
+
+Lumetri-style basics for the selected clips and stills (several at once if you select several):
+
+- **Looks**: Warm, Cool, Vivid, Matte, Cinematic, Bright, Black & White.
+- **Sliders**: exposure, contrast, highlights, shadows, saturation, temperature and tint. Each has a reset button.
+- **Apply to All Clips** gives the whole timeline the same grade.
+
+Colour is applied after HDR tone mapping, identically in the preview and the export.
+
+### Captions
+
+- **One style for all captions** on the track, with the same controls as above.
+- **Words per caption** and **lines**, then **Re-split Captions**: the words are regrouped into captions of that size. Word timing and your text edits are kept.
+- **Every caption in a list**: click a timecode to jump there, type to fix a caption, or delete one.
+- **Show on the video**, **Add Caption at Playhead**, and a track picker when there are translated tracks.
+
+### Project
+
+- **Frame (orientation)**: switch the whole video between 9:16 vertical, 16:9 horizontal, 1:1 square and 4:5 portrait. Clips re-fit the new shape, reframed clips keep following the speaker, and titles and captions keep their place. Export then picks a matching preset.
+- **Frame rate**, **loudness target** (−14, −16, −23 LUFS or off), and the timeline's name.
+- **Markers**: a list with names. **M** adds a marker; **⇧M** and **⌥M** jump to the next and previous one.
+- **Credits** for CC-BY music.
 
 ## Adding things
 
@@ -67,7 +141,7 @@ Right-click a clip and choose **Speed** for presets from 25% to 400%. The inspec
 
 ## Keyframes
 
-Every slider in the inspector's **Transform** and **Audio** sections can be animated: scale, zoom, X/Y, rotation, opacity and gain.
+Every ◆ slider in the Clip tab can be animated: position X/Y, scale, rotation, zoom, opacity and volume.
 
 1. Move the playhead over the clip.
 2. Click **◆** next to a property to add a keyframe there. Click the filled ◆ to remove it.
