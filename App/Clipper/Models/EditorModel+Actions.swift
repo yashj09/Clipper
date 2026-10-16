@@ -140,6 +140,30 @@ extension EditorModel {
         case .paste: paste(Self.clipboard, at: playhead, name: "Paste")
         case .duplicate: duplicateSelection()
         case .toggleLock: toggleLock()
+        case .toggleEnabled:
+            let items = selectedItems
+            guard !items.isEmpty else { return NSSound.beep() }
+            let enable = !items.allSatisfy(\.enabled)
+            perform(Batch(items.map { ModifyItem($0.id, name: "") { $0.enabled = enable } }, name: enable ? "Enable" : "Disable"))
+        case .detachAudio:
+            guard let item = selectedItems.first ?? clipAtPlayhead() else { return NSSound.beep() }
+            perform(DetachAudio(item.id))
+        case .addTransition:
+            let targets = selectedItems.isEmpty ? clipAtPlayhead().map { [$0] } ?? [] : selectedItems
+            guard !targets.isEmpty else { return NSSound.beep() }
+            perform(Batch(targets.map { ModifyItem($0.id, name: "") { $0.transition = Transition(.crossDissolve, duration: RationalTime(seconds: 0.5)) } },
+                          name: "Add Cross Dissolve"))
+        case .addMarker:
+            let t = playhead
+            perform(ModifyTimeline(name: "Add Marker") { tl in
+                guard !tl.markers.contains(where: { $0.time == t }) else { throw EditError.nothingToDo }
+                tl.markers.append(Marker(time: t, name: "Marker \(tl.markers.count + 1)"))
+                tl.markers.sort { $0.time < $1.time }
+            })
+        case .previousMarker:
+            if let m = timeline.markers.last(where: { $0.time < playhead }) { seek(to: m.time) } else { NSSound.beep() }
+        case .nextMarker:
+            if let m = timeline.markers.first(where: { $0.time > playhead }) { seek(to: m.time) } else { NSSound.beep() }
         case .undo: undo()
         case .redo: redo()
         case .addText: addText()
@@ -147,7 +171,7 @@ extension EditorModel {
         case .zoomOut: zoomRequest = .zoomOut(UUID())
         case .zoomToFit: zoomRequest = .fit(UUID())
         case .connectToTimeline, .insertAtPlayhead, .appendToStoryline, .overwriteAtPlayhead,
-             .toggleSnapping, .toggleRipple, .importMedia, .newDraft, .export: break
+             .toggleSnapping, .toggleRipple, .importMedia, .newDraft, .export, .freezeFrame: break
         }
     }
 

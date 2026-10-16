@@ -280,13 +280,17 @@ struct EditorView: View {
     @AppStorage("showBrowser") private var showBrowser = true
 
     var body: some View {
-        VSplitView {
-            HSplitView {
-                if showBrowser { BrowserView(model: model, editor: editor).frame(minWidth: 200, idealWidth: 240, maxWidth: 340) }
-                ViewerView(editor: editor).frame(minWidth: 360, minHeight: 300)
-                InspectorView(editor: editor).frame(minWidth: 260, idealWidth: 300, maxWidth: 380)
+        // The editing panel runs the full height on the right (it has the most controls); browser and viewer share the
+        // top, the timeline spans below them.
+        HSplitView {
+            VSplitView {
+                HSplitView {
+                    if showBrowser { BrowserView(model: model, editor: editor).frame(minWidth: 200, idealWidth: 240, maxWidth: 340) }
+                    ViewerView(editor: editor).frame(minWidth: 320, minHeight: 280)
+                }
+                TimelineView(model: model, editor: editor).frame(minHeight: 200, idealHeight: 320)
             }
-            TimelineView(model: model, editor: editor).frame(minHeight: 220, idealHeight: 320)
+            InspectorView(model: model, editor: editor).frame(minWidth: 300, idealWidth: 340, maxWidth: 460)
         }
         .navigationTitle(editor.project.name)
         .onChange(of: editor.timeline.id) { editor.inPoint = nil; editor.outPoint = nil }

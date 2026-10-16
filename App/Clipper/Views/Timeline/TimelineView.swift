@@ -24,6 +24,7 @@ struct TimelineView: NSViewRepresentable {
         canvas.playhead = editor.playhead
         canvas.inPoint = editor.inPoint
         canvas.outPoint = editor.outPoint
+        canvas.markers = editor.timeline.markers
         if editor.zoomRequest != context.coordinator.lastZoom {
             context.coordinator.lastZoom = editor.zoomRequest
             let mid = canvas.bounds.midX
@@ -63,6 +64,44 @@ struct TimelineView: NSViewRepresentable {
         func timelineDrop(_ payload: String, track: TrackID?, at time: RationalTime, insert: Bool) {
             guard let item = BrowserItem(payload: payload) else { return }
             model.drop(item, on: track, at: time, insert: insert)
+        }
+
+        func timelineRenameTrack(_ id: TrackID) {
+            guard let track = editor.timeline.tracks.first(where: { $0.id == id }) else { return }
+            let alert = NSAlert()
+            alert.messageText = "Rename Track"
+            let field = NSTextField(string: track.name)
+            field.frame = NSRect(x: 0, y: 0, width: 240, height: 24)
+            alert.accessoryView = field
+            alert.addButton(withTitle: "Rename"); alert.addButton(withTitle: "Cancel")
+            alert.window.initialFirstResponder = field
+            guard alert.runModal() == .alertFirstButtonReturn else { return }
+            let name = field.stringValue.trimmingCharacters(in: .whitespaces)
+            guard !name.isEmpty else { return }
+            editor.perform(ModifyTrack(id, name: "Rename Track") { $0.name = name })
+        }
+
+        func timelineDeleteTrack(_ id: TrackID) {
+            guard let track = editor.timeline.tracks.first(where: { $0.id == id }) else { return }
+            if !track.items.isEmpty {
+                let alert = NSAlert()
+                alert.messageText = "Delete “\(track.name)” and its \(track.items.count) items?"
+                alert.informativeText = "You can undo this."
+                alert.addButton(withTitle: "Delete"); alert.addButton(withTitle: "Cancel")
+                guard alert.runModal() == .alertFirstButtonReturn else { return }
+            }
+            editor.perform(ModifyTimeline(name: "Delete Track") { t in
+                guard let i = t.trackIndex(id) else { throw EditError.trackNotFound(id) }
+                if t.tracks[i].locked { throw EditError.trackLocked(id) }
+                t.tracks.remove(at: i)
+            })
+        }
+
+        func timelineAddTrack(_ kind: TrackKind) {
+            editor.perform(ModifyTimeline(name: "Add Track") { t in
+                let count = t.tracks.filter { $0.kind == kind }.count
+                t.tracks.insert(Track(kind: kind, name: kind.rawValue.capitalized + (count > 0 ? " \(count + 1)" : "")), at: t.insertionIndex(forNew: kind))
+            })
         }
 
         func timelineToggle(_ track: TrackID, _ property: TimelineCanvas.TrackToggle) {

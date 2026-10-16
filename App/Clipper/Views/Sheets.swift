@@ -175,6 +175,11 @@ struct ExportSheet: View {
             let t = model.editor?.timeline
             let byTemplate = t?.provenance.flatMap { p in model.templates.first { $0.id == p.template }?.exportPreset }
             presetID = byTemplate ?? model.settings.export.defaultPreset
+            // After a frame change (Project ▸ Frame) the template's preset may be the wrong shape: pick one that fits.
+            if let canvas = t?.canvas, let p = ExportPreset.named(presetID), !p.matchesAspect(of: canvas),
+               let fitting = ExportPreset.builtIn.first(where: { $0.matchesAspect(of: canvas) }) {
+                presetID = fitting.id
+            }
         }
     }
 }

@@ -91,6 +91,24 @@ enum DebugScript {
                   let editor = model.editor, let id = editor.selection.first else { return log("bad keyframe") }
             let half = RationalTime(seconds: editor.timeline.canvas.frameRate.frameDuration.seconds / 2)
             editor.perform(ModifyItem(id, name: "Add Keyframe") { $0.opacity = $0.opacity.setting(v, at: RationalTime(seconds: t), tolerance: half) })
+        case "canvas":
+            // canvas <width> <height>
+            let parts = rest.split(separator: " ").compactMap { Int($0) }
+            guard parts.count == 2, let editor = model.editor else { return log("bad canvas") }
+            editor.perform(ChangeCanvas(Canvas(width: parts[0], height: parts[1], frameRate: editor.timeline.canvas.frameRate)))
+            editor.zoomRequest = .fit(UUID())
+        case "look":
+            // look <name> — on the selected items
+            guard let editor = model.editor, let look = ColorAdjust.looks.first(where: { $0.name == rest }) else { return log("bad look") }
+            let ids = editor.selection
+            editor.perform(ModifyTimeline(name: "Look") { t in
+                for ti in t.tracks.indices { for ii in t.tracks[ti].items.indices where ids.contains(t.tracks[ti].items[ii].id) { t.tracks[ti].items[ii].color = look.adjust } }
+            })
+        case "transition":
+            // transition <crossDissolve|dipToBlack|dipToWhite> <seconds> — on the selected items
+            let parts = rest.split(separator: " ").map(String.init)
+            guard parts.count == 2, let kind = ClipperCore.Transition.Kind(rawValue: parts[0]), let d = Double(parts[1]), let editor = model.editor else { return log("bad transition") }
+            editor.perform(Batch(editor.selectedItems.map { ModifyItem($0.id, name: "") { $0.transition = ClipperCore.Transition(kind, duration: RationalTime(seconds: d)) } }, name: "Transition"))
         case "bind":
             // bind <action> <shortcut spec>: the same path as recording a shortcut in Settings.
             let parts = rest.split(separator: " ").map(String.init)

@@ -10,7 +10,8 @@ final class GPU: @unchecked Sendable {
 
     let device: MTLDevice
     let queue: MTLCommandQueue
-    let pipeline: MTLRenderPipelineState
+    /// One pipeline per blend mode (blending is fixed-function state). Sources are premultiplied.
+    let pipelines: [BlendMode: MTLRenderPipelineState]
     let white: MTLTexture
     private let textureCache: CVMetalTextureCache
     private let lock = NSLock()
@@ -36,17 +37,26 @@ final class GPU: @unchecked Sendable {
         queue = device.makeCommandQueue()!
         // Shaders are compiled from source at startup (≈ tens of ms): works identically under `swift build` and Xcode.
         let library = try! device.makeLibrary(source: Shaders.source, options: nil)
-        let desc = MTLRenderPipelineDescriptor()
-        desc.vertexFunction = library.makeFunction(name: "layer_vertex")
-        desc.fragmentFunction = library.makeFunction(name: "layer_fragment")
-        let ca = desc.colorAttachments[0]!
-        ca.pixelFormat = .bgra8Unorm
-        ca.isBlendingEnabled = true
-        ca.sourceRGBBlendFactor = .one
-        ca.destinationRGBBlendFactor = .oneMinusSourceAlpha
-        ca.sourceAlphaBlendFactor = .one
-        ca.destinationAlphaBlendFactor = .oneMinusSourceAlpha
-        pipeline = try! device.makeRenderPipelineState(descriptor: desc)
+        var made: [BlendMode: MTLRenderPipelineState] = [:]
+        for mode in BlendMode.allCases {
+            let desc = MTLRenderPipelineDescriptor()
+            desc.vertexFunction = library.makeFunction(name: "layer_vertex")
+            desc.fragmentFunction = library.makeFunction(name: "layer_fragment")
+            let ca = desc.colorAttachments[0]!
+            ca.pixelFormat = .bgra8Unorm
+            ca.isBlendingEnabled = true
+            // result = src·S + dst·D, with premultiplied src:
+            switch mode {
+            case .normal: ca.sourceRGBBlendFactor = .one; ca.destinationRGBBlendFactor = .oneMinusSourceAlpha
+            case .add: ca.sourceRGBBlendFactor = .one; ca.destinationRGBBlendFactor = .one
+            case .screen: ca.sourceRGBBlendFactor = .one; ca.destinationRGBBlendFactor = .oneMinusSourceColor
+            case .multiply: ca.sourceRGBBlendFactor = .destinationColor; ca.destinationRGBBlendFactor = .oneMinusSourceAlpha
+            }
+            ca.sourceAlphaBlendFactor = .one
+            ca.destinationAlphaBlendFactor = .oneMinusSourceAlpha
+            made[mode] = try! device.makeRenderPipelineState(descriptor: desc)
+        }
+        pipelines = made
         var cache: CVMetalTextureCache?
         CVMetalTextureCacheCreate(nil, nil, device, nil, &cache)
         textureCache = cache!
@@ -132,6 +142,8 @@ enum Shaders {
         float2 texcoord[4];
         float4 tint;            // premultiplied colour × opacity
         int transfer;           // 0 SDR, 1 HLG, 2 PQ
+        float4 adjustA;         // exposure (stops), contrast, highlights, shadows
+        float4 adjustB;         // saturation, temperature, tint, enabled (0/1)
     };
     struct VOut { float4 pos [[position]]; float2 uv; };
 
@@ -157,6 +169,22 @@ enum Shaders {
         return y > 1e-6 ? rgb * (y_out / y) : float3(0.0);
     }
 
+    // Basic colour correction on display-referred (Rec.709 gamma) colour: exposure and white balance in linear light,
+    // then contrast, shadows/highlights and saturation on the encoded values (how editors' basic controls feel).
+    static float3 color_adjust(float3 rgb, float4 a, float4 b) {
+        float3 lin = pow(max(rgb, 0.0), 2.2);
+        lin *= exp2(a.x);
+        lin *= float3(1.0 + 0.2 * b.y, 1.0 - 0.15 * b.z, 1.0 - 0.2 * b.y);
+        rgb = pow(max(lin, 0.0), 1.0 / 2.2);
+        rgb = (rgb - 0.5) * (1.0 + a.y) + 0.5;
+        float y = dot(rgb, float3(0.2126, 0.7152, 0.0722));
+        rgb += a.w * 0.3 * (1.0 - smoothstep(0.0, 0.55, y));
+        rgb += a.z * 0.3 * smoothstep(0.45, 1.0, y);
+        y = dot(rgb, float3(0.2126, 0.7152, 0.0722));
+        rgb = mix(float3(y), rgb, 1.0 + b.x);
+        return clamp(rgb, 0.0, 1.0);
+    }
+
     fragment float4 layer_fragment(VOut in [[stage_in]], texture2d<float> tex [[texture(0)]],
                                    constant LayerUniforms &u [[buffer(0)]]) {
         constexpr sampler s(filter::linear, address::clamp_to_edge);
@@ -176,6 +204,9 @@ enum Shaders {
                 sdr = apply_luma(n / 180.0, pow(x * (1.0 + x / 2.25) / (1.0 + x), 0.7));
             }
             c = float4(bt709_oetf(sdr), 1.0);
+        }
+        if (u.adjustB.w > 0.5 && c.a > 1e-4) {
+            c = float4(color_adjust(c.rgb / c.a, u.adjustA, u.adjustB) * c.a, c.a);
         }
         return c * u.tint;
     }

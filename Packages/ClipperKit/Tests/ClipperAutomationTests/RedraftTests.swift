@@ -89,3 +89,25 @@ import Testing
         #expect(errors(out).isEmpty)
     }
 }
+
+@Suite struct CaptionRepagingTests {
+    @Test func repagingKeepsWordsTimesAndEmphasis() throws {
+        let tl = DraftPipeline.run(talkingInput()).timeline
+        let track = try #require(tl.tracks.first { $0.kind == .caption })
+        guard case .caption(let first) = track.items[0].content else { Issue.record("no captions"); return }
+        var style = try #require(tl.styles[first.style])
+        // Mark one word as emphasized by hand, then re-page with one word per page.
+        var items = track.items
+        if case .caption(var c) = items[0].content { c.words[0].emphasis = true; items[0].content = .caption(c) }
+        style.wordsPerPage = 1
+        let pages = CaptionPaging.repage(items, styleName: first.style, style: style, rate: tl.canvas.frameRate)
+        let before = items.flatMap { item -> [String] in if case .caption(let c) = item.content { c.words.map(\.text) } else { [] } }
+        let after = pages.flatMap { item -> [String] in if case .caption(let c) = item.content { c.words.map(\.text) } else { [] } }
+        #expect(after == before)
+        #expect(pages.count == before.count)
+        guard case .caption(let p0) = pages[0].content else { return }
+        #expect(p0.words[0].emphasis)
+        #expect(abs(pages[0].start.seconds - (items[0].start + first.words[0].start).seconds) < 0.05)
+        #expect(zip(pages, pages.dropFirst()).allSatisfy { $0.end <= $1.start })
+    }
+}

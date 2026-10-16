@@ -25,7 +25,7 @@ extension Subtitles {
         var used: [String: TextStyle] = [:]
         for (layer, track) in tracks.enumerated() {
             for item in track.items {
-                guard case .caption(let caption) = item.content, !caption.words.isEmpty else { continue }
+                guard item.enabled, case .caption(let caption) = item.content, !caption.words.isEmpty else { continue }
                 let name = ASS.styleName(caption.style)
                 let style = timeline.styles[caption.style] ?? TextStyle()
                 used[name] = style

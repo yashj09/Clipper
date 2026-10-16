@@ -91,7 +91,7 @@ extension Timeline {
 extension RationalTime {
     /// Timeline duration → source duration at `speed`. Frame-aligned times have a small timescale (e.g. 30), where
     /// `* speed` would round by up to half a frame; working at ≥ the default scale keeps the error under 10 µs.
-    func timesSpeed(_ speed: Double) -> RationalTime {
+    public func timesSpeed(_ speed: Double) -> RationalTime {
         speed == 1 ? self : rescaled(to: Swift.max(scale, RationalTime.defaultScale)) * speed
     }
 }

@@ -7,6 +7,8 @@ struct TimedWord {
     var start: Double
     var end: Double
     var isFiller: Bool
+    /// Known emphasis (re-paging keeps the user's); nil = decide from the text.
+    var emphasis: Bool? = nil
 }
 
 enum Captions {
@@ -45,7 +47,7 @@ enum Captions {
                 CaptionContent.Word(text: display(w.text, style: style),
                                     start: RationalTime(seconds: max(0, w.start - start.seconds)),
                                     end: RationalTime(seconds: max(0, w.end - start.seconds)),
-                                    emphasis: isEmphasis(w.text) || (j == longest && w.text.count >= 8))
+                                    emphasis: w.emphasis ?? (isEmphasis(w.text) || (j == longest && w.text.count >= 8)))
             }
             var item = Item(id: ids.uuid(), name: "Caption \(i + 1)", range: TimeRange(start: start, end: end),
                             content: .caption(CaptionContent(words: words, style: styleName)), origin: .auto(pass: "captions"))
@@ -131,5 +133,25 @@ enum Visual {
         if maxD <= epsilon { return [a, b] }
         let left = rdp(Array(p[0...index]), epsilon: epsilon), right = rdp(Array(p[index...]), epsilon: epsilon)
         return left.dropLast() + right
+    }
+}
+
+/// Re-splitting existing captions into pages after the user changes "words per caption" (or edits a lot of text):
+/// the same paging rules as the draft, applied to the words already on the track.
+public enum CaptionPaging {
+    /// New caption items for `captions` (one track's pages, any order), paged for `style`. Word timing, emphasis
+    /// and the user's text edits are kept; disabled pages are left out.
+    public static func repage(_ captions: [Item], styleName: String, style: TextStyle, rate: FrameRate) -> [Item] {
+        var words: [TimedWord] = []
+        for item in captions.sorted(by: { $0.start < $1.start }) where item.enabled {
+            guard case .caption(let c) = item.content else { continue }
+            for w in c.words {
+                words.append(TimedWord(text: w.text, start: (item.start + w.start).seconds, end: (item.start + w.end).seconds,
+                                       isFiller: false, emphasis: w.emphasis))
+            }
+        }
+        guard !words.isEmpty else { return [] }
+        var ids = IDGenerator(seed: stableHash("repage|\(styleName)|\(words.count)|\(words[0].start)"))
+        return Captions.items(words: words, styleName: styleName, style: style, rate: rate, ids: &ids)
     }
 }

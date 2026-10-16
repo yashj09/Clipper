@@ -20,6 +20,9 @@ protocol TimelineCanvasDelegate: AnyObject {
     func timelineDropPreview(_ payload: String) -> (duration: RationalTime, kinds: [TrackKind])?
     /// A drop onto `track` (nil: below the tracks, so it goes on a free or new track). ⌥ asks for an insert edit.
     func timelineDrop(_ payload: String, track: TrackID?, at time: RationalTime, insert: Bool)
+    func timelineRenameTrack(_ id: TrackID)
+    func timelineDeleteTrack(_ id: TrackID)
+    func timelineAddTrack(_ kind: TrackKind)
 }
 
 /// Pro-NLE timeline drawn with Core Animation (Phase 0 S4: virtualized layers + level of detail stay at 120 fps).
@@ -43,6 +46,7 @@ final class TimelineCanvas: NSView {
     /// In / Out marks, drawn as a shaded range over the tracks and brackets on the ruler.
     var inPoint: RationalTime? { didSet { if inPoint != oldValue { positionMarks() } } }
     var outPoint: RationalTime? { didSet { if outPoint != oldValue { positionMarks() } } }
+    var markers: [Marker] = [] { didSet { if markers != oldValue { ruler.needsDisplay = true } } }
 
     /// Zoom (points per second) and horizontal scroll (seconds at the left edge).
     private(set) var pxPerSecond: CGFloat = 60
@@ -592,6 +596,39 @@ final class TimelineCanvas: NSView {
         addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseMoved, .activeInKeyWindow, .inVisibleRect], owner: self))
     }
 
+    /// Right-click on a track header: rename, delete, add tracks.
+    fileprivate func headerMenu(at p: CGPoint) -> NSMenu? {
+        let menu = NSMenu()
+        if let row = row(at: p.y + Self.rulerHeight) {
+            let id = row.track.id.uuidString
+            menu.addItem(item("Rename “\(row.track.name)”…", #selector(renameTrack(_:)), id))
+            menu.addItem(item(row.track.items.isEmpty ? "Delete Track" : "Delete Track and Its \(row.track.items.count) Items…", #selector(deleteTrack(_:)), id))
+            menu.addItem(.separator())
+        }
+        for (title, kind) in [("Add Video Track", TrackKind.video), ("Add Overlay Track", .overlay), ("Add Title Track", .title),
+                              ("Add Caption Track", .caption), ("Add Audio Track", .audio), ("Add Music Track", .music)] {
+            menu.addItem(item(title, #selector(addTrack(_:)), kind.rawValue))
+        }
+        return menu
+    }
+
+    private func item(_ title: String, _ action: Selector, _ value: String) -> NSMenuItem {
+        let mi = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        mi.target = self
+        mi.representedObject = value
+        return mi
+    }
+
+    @objc private func renameTrack(_ sender: NSMenuItem) {
+        if let s = sender.representedObject as? String, let id = UUID(uuidString: s) { delegate?.timelineRenameTrack(id) }
+    }
+    @objc private func deleteTrack(_ sender: NSMenuItem) {
+        if let s = sender.representedObject as? String, let id = UUID(uuidString: s) { delegate?.timelineDeleteTrack(id) }
+    }
+    @objc private func addTrack(_ sender: NSMenuItem) {
+        if let s = sender.representedObject as? String, let kind = TrackKind(rawValue: s) { delegate?.timelineAddTrack(kind) }
+    }
+
     // Header clicks (mute / hide / lock).
     fileprivate func headerClicked(at p: CGPoint) {
         guard let row = row(at: p.y + Self.rulerHeight) else { return }
@@ -613,6 +650,7 @@ final class ItemLayer: CALayer {
     private let filmstrip = CALayer()
     private let wave = CAShapeLayer()
     private let keyMarks = CAShapeLayer()
+    private let transitionMark = CAGradientLayer()
     private var tiles: [CALayer] = []
 
     static func color(_ kind: TrackKind) -> NSColor {
@@ -639,6 +677,10 @@ final class ItemLayer: CALayer {
         keyMarks.strokeColor = NSColor.black.withAlphaComponent(0.8).cgColor
         keyMarks.lineWidth = 1
         addSublayer(keyMarks)
+        transitionMark.startPoint = CGPoint(x: 0, y: 0.5); transitionMark.endPoint = CGPoint(x: 1, y: 0.5)
+        transitionMark.colors = [NSColor.black.withAlphaComponent(0.55).cgColor, NSColor.black.withAlphaComponent(0).cgColor]
+        transitionMark.isHidden = true
+        addSublayer(transitionMark)
         label.fontSize = 11
         label.contentsScale = 2
         label.foregroundColor = NSColor.white.cgColor
@@ -653,7 +695,7 @@ final class ItemLayer: CALayer {
     func apply(item: Item, kind: TrackKind, selected: Bool, dimmed: Bool) {
         backgroundColor = Self.color(kind).cgColor
         borderWidth = selected ? 2 : 0
-        opacity = dimmed ? 0.45 : 1
+        opacity = dimmed ? 0.45 : (item.enabled ? 1 : 0.3)
         var text = item.name
         switch item.content {
         case .caption(let c): text = c.text
@@ -661,6 +703,14 @@ final class ItemLayer: CALayer {
         default: break
         }
         if item.locked { text = "🔒 " + text }
+        if !item.enabled { text = "⊘ " + text }
+        if let t = item.transition, item.range.duration > .zero {
+            let w = min(1, t.duration.seconds / item.range.duration.seconds) * bounds.width
+            transitionMark.isHidden = w < 3
+            transitionMark.frame = CGRect(x: 0, y: 0, width: w, height: bounds.height)
+        } else {
+            transitionMark.isHidden = true
+        }
         if (label.string as? String) != text { label.string = text }
         label.isHidden = bounds.width < 30
         label.frame = CGRect(x: 5, y: 2, width: max(0, bounds.width - 10), height: 14)
@@ -760,6 +810,15 @@ final class RulerView: NSView {
             CGRect(x: x - 1, y: bounds.height - 16, width: 2, height: 16).fill()
             CGRect(x: isIn ? x : x - 6, y: bounds.height - 16, width: 7, height: 2).fill()
         }
+        // Markers: small orange flags.
+        NSColor.systemOrange.setFill()
+        for m in canvas.markers {
+            let x = canvas.x(for: m.time.seconds)
+            guard x >= TimelineCanvas.headerWidth else { continue }
+            let flag = NSBezierPath()
+            flag.move(to: CGPoint(x: x - 4, y: 2)); flag.line(to: CGPoint(x: x + 4, y: 2)); flag.line(to: CGPoint(x: x + 4, y: 9))
+            flag.line(to: CGPoint(x: x, y: 13)); flag.line(to: CGPoint(x: x - 4, y: 9)); flag.close(); flag.fill()
+        }
         // Playhead head.
         let px = canvas.x(for: canvas.playhead.seconds)
         if px >= TimelineCanvas.headerWidth {
@@ -806,6 +865,10 @@ final class HeaderView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         canvas?.headerClicked(at: convert(event.locationInWindow, from: nil))
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        canvas?.headerMenu(at: convert(event.locationInWindow, from: nil))
     }
 }
 
