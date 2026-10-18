@@ -125,17 +125,33 @@ public struct PunchInRule: Codable, Sendable, Equatable {
     }
 }
 
+public enum TakePolicy: String, Codable, Sendable {
+    /// The last complete take: people stop recording when they are happy.
+    case last
+    /// Fewest fillers, steadiest pace, highest transcription confidence. Ties go to the later take.
+    case best
+}
+
 /// Speech clean-up decided from the transcript before cutting. Keys missing from JSON take the defaults, so `{}`
 /// turns every edit on.
 public struct SpeechEditRule: Codable, Sendable, Equatable {
+    /// Which take of a line recorded several times survives; nil (JSON `null`) keeps every take.
+    public var takes: TakePolicy?
     /// Cut stutters ("the the", "I, I think") and restarts ("So the, so the main thing is").
     public var falseStarts: Bool
-    public init(falseStarts: Bool = true) { self.falseStarts = falseStarts }
+    public init(takes: TakePolicy? = .last, falseStarts: Bool = true) { self.takes = takes; self.falseStarts = falseStarts }
 
-    enum CodingKeys: String, CodingKey { case falseStarts }
+    enum CodingKeys: String, CodingKey { case takes, falseStarts }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        takes = c.contains(.takes) ? try c.decodeIfPresent(TakePolicy.self, forKey: .takes) : .last
         falseStarts = try c.decodeIfPresent(Bool.self, forKey: .falseStarts) ?? true
+    }
+    /// Writes `takes` even when nil, so "keep every take" does not read back as the default.
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(takes, forKey: .takes)
+        try c.encode(falseStarts, forKey: .falseStarts)
     }
 }
 

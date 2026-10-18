@@ -32,15 +32,41 @@ struct SpokenWord: Equatable {
     subscript<T>(dynamicMember path: KeyPath<TranscriptWord, T>) -> T { word[keyPath: path] }
 }
 
+/// One line recorded several times. Takes are word positions in speaking order; `kept` indexes `takes`.
+struct TakeGroup: Equatable {
+    var takes: [Range<Int>]
+    var kept: Int
+    /// Everything in the group's span except the kept take, chatter between takes included.
+    var dropped: [ClosedRange<Int>] {
+        let keep = takes[kept]
+        var out: [ClosedRange<Int>] = []
+        if keep.lowerBound > takes[0].lowerBound { out.append(takes[0].lowerBound...(keep.lowerBound - 1)) }
+        if keep.upperBound < takes[takes.count - 1].upperBound { out.append(keep.upperBound...(takes[takes.count - 1].upperBound - 1)) }
+        return out
+    }
+}
+
+/// A removed retake group as the draft reports it, in source seconds.
+struct Retake: Equatable {
+    var kept: Range<Double>
+    /// 0-based position of the kept take among `takes`.
+    var take: Int
+    var takes: Int
+    var removed: [Range<Double>]
+}
+
 /// Everything the draft decides about one clip's speech, in source seconds. A pure function of the clip and the rule.
 struct SpeechPlan: Equatable {
     /// Words in the clip range that survive the plan, with cues. Fillers stay: filler policy is the cutter's.
     var words: [SpokenWord]
     /// Source time the cutter must drop.
     var excluded: RangeSet<Double>
+    var retakes: [Retake]
     var removedRestarts: Int
+    var removedTakes: Int { retakes.reduce(0) { $0 + $1.takes - 1 } }
 
     /// `rule == nil` excludes nothing; cues are still computed, since captions and zooms want them either way.
+    /// Restarts go first so a stutter doesn't lower the similarity of two takes.
     init(clip: ClipInput, rule: SpeechEditRule?) {
         let range = clip.range
         let transcript = clip.analysis.transcript
@@ -54,8 +80,20 @@ struct SpeechPlan: Equatable {
             dropped.insert(integersIn: span.lowerBound...span.upperBound)
         }
         let left = all.indices.filter { !dropped.contains($0) }.map { all[$0] }
-        let cues = Speech.cues(left, sentences: Speech.sentences(left), speech: clip.analysis.speech, english: english)
-        words = zip(left, cues).map { SpokenWord(word: $0, cue: $1) }
+        let sentences = Speech.sentences(left)
+        let groups = rule?.takes.map { Speech.takeGroups(left, sentences: sentences, policy: $0) } ?? []
+        var retaken = IndexSet()
+        retakes = groups.map { g in
+            let cuts = g.dropped.map { span in
+                retaken.insert(integersIn: span.lowerBound...span.upperBound)
+                return Speech.cut(left, dropping: span, clipEnd: range.upperBound)
+            }
+            for c in cuts { excluded.insert(contentsOf: c) }
+            let keep = g.takes[g.kept]
+            return Retake(kept: left[keep.lowerBound].start..<left[keep.upperBound - 1].end, take: g.kept, takes: g.takes.count, removed: cuts)
+        }
+        let cues = Speech.cues(left, sentences: sentences, speech: clip.analysis.speech, english: english)
+        words = left.indices.filter { !retaken.contains($0) }.map { SpokenWord(word: left[$0], cue: cues[$0]) }
         self.excluded = excluded
         removedRestarts = drops.count
     }
@@ -151,6 +189,80 @@ enum Speech {
         let start = words[span.lowerBound].start
         return start..<max(words[span.upperBound].end, next - 0.08, start)
     }
+
+    /// Retake groups among the sentences of one clip. A sentence joins the latest group whose last or longest take
+    /// it resembles: word bigrams overlapping by at least 0.6 of the shorter take (and at least two), no more than
+    /// 90 s after the group's last take, with at most two sentences and twelve words between ("ugh, let me do that
+    /// again"). Real content between two similar lines makes the second a callback, not a retake. Takes under half
+    /// the length of the one they are compared with never join: a short fragment is a restart, not a take.
+    static func takeGroups(_ words: [TranscriptWord], sentences: [Sentence], policy: TakePolicy) -> [TakeGroup] {
+        let tokens = sentences.map { s in s.words.filter { !$0.isFiller }.map { norm($0.text) } }
+        let bigrams = tokens.map { t in Set(zip(t, t.dropFirst()).map { "\($0) \($1)" }) }
+        func alike(_ a: Int, _ b: Int) -> Bool {
+            let shared = bigrams[a].intersection(bigrams[b]).count
+            let shorter = min(tokens[a].count, tokens[b].count), longer = max(tokens[a].count, tokens[b].count)
+            return shared >= 2 && Double(shorter) >= 0.5 * Double(longer)
+                && Double(shared) >= 0.6 * Double(min(bigrams[a].count, bigrams[b].count))
+        }
+        var groups: [[Int]] = []
+        for j in sentences.indices where bigrams[j].count >= 2 {
+            let target = groups.indices.last { g in
+                let last = groups[g][groups[g].count - 1]
+                let between = (last + 1)..<j
+                guard sentences[j].start - sentences[last].end <= 90, between.count <= 2,
+                      between.reduce(0, { $0 + tokens[$1].count }) <= 12 else { return false }
+                let longest = groups[g].max { tokens[$0].count < tokens[$1].count }!
+                return alike(last, j) || alike(longest, j)
+            }
+            if let g = target { groups[g].append(j) } else { groups.append([j]) }
+        }
+        return groups.filter { $0.count >= 2 }.map { members in
+            let length = members.map { tokens[$0].count }
+            // An abandoned half-take never wins.
+            let complete = members.indices.filter { Double(length[$0]) >= 0.8 * Double(length.max()!) }
+            let kept = switch policy {
+            case .last: complete.last!
+            case .best: complete.max { (quality(sentences[members[$0]]), $0) < (quality(sentences[members[$1]]), $1) }!
+            }
+            return TakeGroup(takes: members.map { sentences[$0].indices }, kept: kept)
+        }
+    }
+
+    /// Mean confidence (missing counts as 1), less the filler rate and the unevenness of the pace.
+    static func quality(_ s: Sentence) -> Double {
+        let spoken = s.words.filter { !$0.isFiller }
+        let confidence = spoken.isEmpty ? 0 : spoken.reduce(0) { $0 + ($1.confidence ?? 1) } / Double(spoken.count)
+        let fillerRate = Double(s.words.count - spoken.count) / Double(max(s.words.count, 1))
+        let gaps = zip(s.words, s.words.dropFirst()).map { $1.start - $0.start }
+        var paceCV = 0.0
+        if gaps.count >= 2 {
+            let mean = gaps.reduce(0, +) / Double(gaps.count)
+            let sd = (gaps.reduce(0) { $0 + ($1 - mean) * ($1 - mean) } / Double(gaps.count)).squareRoot()
+            paceCV = mean > 0 ? sd / mean : 0
+        }
+        return confidence - 0.5 * fillerRate - 0.3 * paceCV
+    }
+
+    /// One marker per retake group, at the kept take's place on the timeline (or the next placed source time of that
+    /// clip, if the duration fit dropped it), naming the removed source ranges so the user can find them.
+    static func takeMarkers(_ plans: [Int: SpeechPlan], clips: [ClipInput], items: [Item], rate: FrameRate,
+                            ids: inout IDGenerator) -> [Marker] {
+        var found: [(time: RationalTime, name: String)] = []
+        for (i, plan) in plans.sorted(by: { $0.key < $1.key }) {
+            let clip = clips[i]
+            for r in plan.retakes {
+                let t = r.kept.lowerBound
+                guard let item = items.first(where: { $0.content.mediaRef.map { $0.asset == clip.asset.id && $0.source.end.seconds > t } ?? false }),
+                      let ref = item.content.mediaRef else { continue }
+                let removed = r.removed.map { "\(clock($0.lowerBound))–\(clock($0.upperBound))" }.joined(separator: ", ")
+                found.append((RationalTime.frames(item.start.seconds + max(0, t - ref.source.start.seconds), rate),
+                              "Retake: kept take \(r.take + 1) of \(r.takes) · removed \(removed) (\(clip.asset.name))"))
+            }
+        }
+        return found.sorted { $0.time < $1.time }.map { Marker(id: ids.uuid(), time: $0.time, name: $0.name) }
+    }
+
+    static func clock(_ s: Double) -> String { String(format: "%d:%04.1f", Int(s) / 60, s.truncatingRemainder(dividingBy: 60)) }
 
     static let numberWords: Set<String> = [
         "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve", "twenty", "thirty",

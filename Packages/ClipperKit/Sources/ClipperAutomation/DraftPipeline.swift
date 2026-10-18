@@ -29,6 +29,7 @@ public enum DraftPipeline {
 
         // 1. Cut the primary storyline into segments.
         var segments: [Segment] = []
+        var plans: [Int: SpeechPlan] = [:]
         var music: MusicTrack?
         var musicOffset = 0.0
         if let beatRule = rules.beatCut {
@@ -55,6 +56,8 @@ public enum DraftPipeline {
         } else {
             for (i, clip) in input.clips.enumerated() where (clip.slot ?? primary.id) == primary.id {
                 let plan = SpeechPlan(clip: clip, rule: rules.speechEdits)
+                plans[i] = plan
+                report.removedTakes += plan.removedTakes
                 report.removedRestarts += plan.removedRestarts
                 segments += Cutting.segments(for: i, clip: clip, rule: rules.silenceCut, plan: plan)
             }
@@ -261,6 +264,9 @@ public enum DraftPipeline {
             }
             timeline.tracks.append(Track(id: ids.uuid(), kind: element.track, name: element.id.capitalized, items: [item]))
         }
+
+        // Drawn last so no earlier ID depends on how many retakes there were.
+        timeline.markers = Speech.takeMarkers(plans, clips: input.clips, items: primaryItems, rate: rate, ids: &ids)
 
         // Captions above titles above everything else; audio-only tracks last.
         timeline.tracks = timeline.tracks.enumerated().sorted { a, b in

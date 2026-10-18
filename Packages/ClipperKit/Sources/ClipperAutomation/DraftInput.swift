@@ -68,13 +68,15 @@ public struct DraftReport: Sendable, Equatable {
     public var notes: [String] = []
     public var warnings: [String] = []
     public var removedSeconds: Double = 0
+    /// Earlier takes of a line recorded several times, cut by the speech edits.
+    public var removedTakes: Int = 0
     /// Stutters and abandoned sentence starts cut by the speech edits.
     public var removedRestarts: Int = 0
     public var musicTrack: String?
     public init() {}
 
     var speechEditNote: String? {
-        let parts = [(removedRestarts, "false start")].filter { $0.0 > 0 }.map { "\($0.0) \($0.1)\($0.0 == 1 ? "" : "s")" }
+        let parts = [(removedTakes, "retake"), (removedRestarts, "false start")].filter { $0.0 > 0 }.map { "\($0.0) \($0.1)\($0.0 == 1 ? "" : "s")" }
         return parts.isEmpty ? nil : "Removed " + parts.joined(separator: " and ")
     }
 }

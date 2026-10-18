@@ -41,7 +41,7 @@ public enum BuiltIns {
         contentType: .talkingHead, canvas: Canvas(width: 1080, height: 1920, frameRate: .fps30),
         slots: [Slot(id: "speaker", name: "Speaker", role: .primary, reframe: .face)],
         elements: [title("title-bold", seconds: 2.5)],
-        rules: Rules(maxDuration: 60, silenceCut: SilenceCutRule(minGap: 0.35), beatSnap: BeatSnapRule(),
+        rules: Rules(maxDuration: 60, speechEdits: SpeechEditRule(), silenceCut: SilenceCutRule(minGap: 0.35), beatSnap: BeatSnapRule(),
                      punchIn: PunchInRule(zoom: 1.12, minSpacing: 4),
                      captions: CaptionRule(style: "bold-pop"), duck: DuckRule(depth: 14)),
         music: MusicPolicy(moods: ["chill", "upbeat", "inspiring"], minBPM: 80, maxBPM: 125, gain: -22))

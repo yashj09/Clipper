@@ -96,3 +96,71 @@ func kept(_ plan: SpeechPlan) -> [String] { plan.words.map(\.text) }
         #expect(words.prefix(3).map { $0.lowercased() } == ["so", "the", "main"])
     }
 }
+
+@Suite struct RetakeTests {
+    @Test func retakesKeepLastCompleteTake() {
+        let tr = transcript(["Today we are testing the new editor.", "Today we are testing the new editor on a laptop.",
+                             "Today we are testing the new", "Next we look at captions."], pauses: [1.5, 1.5, 1.5])
+        let plan = SpeechPlan(clip: speakerClip(tr), rule: SpeechEditRule(takes: .last))
+        #expect(plan.removedTakes == 2)
+        #expect(plan.retakes.map(\.take) == [1])
+        #expect(kept(plan) == "Today we are testing the new editor on a laptop. Next we look at captions.".split(separator: " ").map(String.init))
+        let segments = Cutting.segments(for: 0, clip: speakerClip(tr), rule: SilenceCutRule(), plan: plan)
+        #expect(segments.allSatisfy { plan.excluded.isDisjoint(RangeSet($0.start..<$0.end)) })
+        #expect(segments.flatMap(\.words).map(\.text) == kept(plan))
+        #expect(SpeechPlan(clip: speakerClip(tr), rule: SpeechEditRule(takes: nil)).retakes.isEmpty)
+    }
+
+    @Test func bestPolicyPicksCleanTake() {
+        let messy = "Um so this uh runs fully offline.", clean = "So this runs fully offline."
+        for order in [[messy, clean], [clean, messy]] {
+            var tr = transcript(order, pauses: [1.5])
+            tr.words = tr.words.map { var w = $0; w.confidence = order[0] == messy ? (w.start < 3 ? 0.6 : 0.9) : (w.start < 2.5 ? 0.9 : 0.6); return w }
+            let best = SpeechPlan(clip: speakerClip(tr), rule: SpeechEditRule(takes: .best))
+            #expect(kept(best) == clean.split(separator: " ").map(String.init), "\(order)")
+            let last = SpeechPlan(clip: speakerClip(tr), rule: SpeechEditRule(takes: .last))
+            #expect(kept(last) == order[1].split(separator: " ").map(String.init))
+        }
+    }
+
+    @Test func distantOrSeparatedRepeatsAreNotRetakes() {
+        let line = "This editor runs entirely on your own laptop."
+        let separated = transcript([line, "Captions are generated on device.", "Music ducks under your voice.",
+                                    "Exports land in the folder you pick.", "Nothing is ever uploaded anywhere.", line],
+                                   pauses: [1, 1, 1, 1, 1])
+        #expect(SpeechPlan(clip: speakerClip(separated), rule: SpeechEditRule()).retakes.isEmpty)
+        let distant = transcript([line, line], pauses: [100])
+        #expect(SpeechPlan(clip: speakerClip(distant, seconds: 120), rule: SpeechEditRule()).retakes.isEmpty)
+        let fragment = transcript(["This editor runs entirely on your own laptop and also on the old desktop in the office.",
+                                   "This editor runs entirely"], pauses: [1.5])
+        #expect(SpeechPlan(clip: speakerClip(fragment), rule: SpeechEditRule()).retakes.isEmpty)
+    }
+
+    @Test func draftReportsAndMarksRetakes() throws {
+        var input = talkingInput()
+        input.clips[0].analysis.transcript = transcript(
+            ["Welcome back, today we are testing an automatic editor.", "Welcome back, today we are testing an automatic video editor.",
+             "Everything runs locally on your own machine."], pauses: [1.2, 1.2])
+        let r = DraftPipeline.run(input)
+        #expect(r.report.removedTakes == 1)
+        #expect(r.report.notes.contains("Removed 1 retake"))
+        let markers = r.timeline.markers
+        try #require(markers.count == 1)
+        let video = r.timeline.tracks.first { $0.kind == .video }!
+        let keptStart = video.items[0].start.seconds + 0.08   // the first kept word, after the silence cut's lead-in
+        #expect(abs(markers[0].time.seconds - keptStart) < 0.04)
+        #expect(markers[0].name.hasPrefix("Retake: kept take 2 of 2 · removed 0:00.5–"))
+        let plain = DraftPipeline.run(talkingInput())
+        #expect(plain.timeline.markers.isEmpty && plain.report.removedTakes == 0 && plain.report.removedRestarts == 0)
+        let again = DraftPipeline.run(input)
+        #expect(try ClipperJSON.encode(again.timeline) == ClipperJSON.encode(r.timeline))
+    }
+
+    @Test func takesDecodeWithDefaultsAndRoundTripNull() throws {
+        #expect(try ClipperJSON.decode(SpeechEditRule.self, from: Data("{}".utf8)) == SpeechEditRule())
+        #expect(try ClipperJSON.decode(SpeechEditRule.self, from: Data(#"{"takes": null}"#.utf8)).takes == nil)
+        let off = SpeechEditRule(takes: nil, falseStarts: false)
+        #expect(try ClipperJSON.decode(SpeechEditRule.self, from: ClipperJSON.encode(off)) == off)
+        #expect(try ClipperJSON.decode(Rules.self, from: Data("{}".utf8)).speechEdits == nil)
+    }
+}
