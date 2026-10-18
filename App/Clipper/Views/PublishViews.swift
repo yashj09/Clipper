@@ -76,7 +76,12 @@ struct PublishSheet: View {
         }
         .padding(20).frame(width: 560)
         .task {
-            title = model.editor?.timeline.name ?? ""
+            if let timeline = model.editor?.timeline {
+                let defaults = PublishDefaults.make(timeline: timeline)
+                title = defaults.title
+                if description.isEmpty { description = defaults.description }
+                if tags.isEmpty { tags = defaults.tags.joined(separator: ", ") }
+            }
             for p in Platform.allCases where await model.isConnected(p) { connected.insert(p) }
             selected = connected
         }

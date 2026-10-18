@@ -21,6 +21,22 @@ clipper publish calendar                       # .ics feed for Calendar/Notion
 
 In the app: **Settings ▸ Accounts** (keys, Connect, setup guides), **Publish…** in the editor, and **Publishing** in the sidebar.
 
+## Description, chapters and hashtags
+
+A draft made with the local LLM (`clipper draft --llm …`, or the app with the local LLM on) keeps the brief's
+description and hashtags on the timeline. The Publish sheet and `clipper publish now|schedule` (without
+`--description`/`--tags`) start from:
+- **Title**: the timeline's name.
+- **Description**: the brief's description, then a YouTube chapter list made from the timeline's `Chapter: <title>`
+  markers (`0:00 Intro`, `1:05 Setup`, …), then the hashtags on one line. The list is left out unless there are at
+  least 3 chapter markers and every chapter lasts at least 10 s. A first chapter in the first 10 s starts at 0:00;
+  a later one gets `0:00 Intro` before it.
+- **Tags**: the hashtags.
+
+Music credits are still appended after all of this. When YouTube's 5,000-byte limit is exceeded, the prose is
+shortened first, then the hashtag line goes, then chapters from the end; the credits are never cut.
+`clipper publish now … --dry-run` prints the title, tags and full description without exporting or uploading.
+
 ## YouTube
 
 1. Open https://console.cloud.google.com/ and create a project.

@@ -36,8 +36,9 @@ struct Publish: AsyncParsableCommand {
         @Option(help: "Comma-separated: youtube, tiktok, instagram.") var to: String
         @Option(help: "When: \"2026-10-20 18:30\", \"+2h\", \"now\".") var at = "now"
         @Option(help: "Title (default: the timeline's name).") var title: String?
-        @Option(help: "Description text (music credits are always appended).") var description = ""
-        @Option(help: "Comma-separated tags/hashtags.") var tags = ""
+        @Option(help: "Description text (default: the draft's brief, chapters and hashtags; music credits are always appended).")
+        var description: String?
+        @Option(help: "Comma-separated tags/hashtags (default: the draft's hashtags).") var tags: String?
         @Option(help: "private, unlisted or public.") var visibility = "private"
         @Option(help: "Export preset.") var preset = "shorts-1080x1920"
 
@@ -63,9 +64,13 @@ struct Publish: AsyncParsableCommand {
             guard ExportPreset.named(preset) != nil else {
                 throw ValidationErrorText("Unknown preset. Try: \(ExportPreset.builtIn.map(\.id).joined(separator: ", "))")
             }
+            let defaults = PublishDefaults.make(timeline: p.timelines[timeline])
+            if description == nil { Console.line("Description (from the draft):\n\(defaults.description.isEmpty ? "(none)" : defaults.description)") }
+            if tags == nil { Console.line("Tags (from the draft): \(defaults.tags.isEmpty ? "(none)" : defaults.tags.joined(separator: ", "))") }
             let post = ScheduledPost(projectID: p.id, timelineIndex: timeline, platforms: platforms,
-                                     title: title ?? p.timelines[timeline].name, description: description,
-                                     tags: tags.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty },
+                                     title: title ?? defaults.title, description: description ?? defaults.description,
+                                     tags: tags.map { $0.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty } }
+                                         ?? defaults.tags,
                                      visibility: vis, scheduledAt: try Publish.parseDate(at), presetID: preset)
             if let problem = post.problems.first { throw ValidationErrorText(problem) }
             return post
@@ -270,19 +275,32 @@ struct Publish: AsyncParsableCommand {
         @Option var timeline = 0
         @Option(help: "Comma-separated platforms.") var to: String
         @Option var title: String?
-        @Option var description = ""
-        @Option var tags = ""
+        @Option(help: "Description (default: the draft's brief, chapters and hashtags).") var description: String?
+        @Option(help: "Comma-separated tags (default: the draft's hashtags).") var tags: String?
         @Option(help: "private, unlisted or public (Instagram Reels are always public, so Instagram needs public).") var visibility = "private"
         @Option var preset = "shorts-1080x1920"
+        @Flag(help: "Print what would be sent (title, description with credits, tags) without exporting or uploading.") var dryRun = false
 
         func run() async throws {
-            var schedule = try Schedule.parse([project, "--timeline", String(timeline), "--to", to, "--at", "now", "--description", description,
-                                               "--tags", tags, "--visibility", visibility, "--preset", preset] + (title.map { ["--title", $0] } ?? []))
+            let optional = [("--title", title), ("--description", description), ("--tags", tags)].flatMap { name, value in value.map { [name, $0] } ?? [] }
+            var schedule = try Schedule.parse([project, "--timeline", String(timeline), "--to", to, "--at", "now",
+                                               "--visibility", visibility, "--preset", preset] + optional)
             schedule.lib = lib
             let s = try Services(lib)
             let q = Publish.queue(s)
             // Run exactly the post created here (never pick one out of the queue).
             let post = try schedule.makePost(s)
+            if dryRun {
+                let attributions = try s.library.loadProject(post.projectID).timelines[post.timelineIndex].attributions
+                let request = PublishRequest(file: URL(fileURLWithPath: "\(post.title).mp4"), title: post.title, description: post.description,
+                                             tags: post.tags, visibility: post.visibility, attributions: attributions)
+                Console.line("Dry run: nothing exported, queued or uploaded.")
+                Console.line("To: \(post.platforms.map(\.displayName).joined(separator: ", ")) (\(request.visibility.rawValue))")
+                Console.line("Title: \(request.title)")
+                Console.line("Tags: \(request.tags.joined(separator: ", "))")
+                Console.line("Description:\n\(request.fullDescription)")
+                return
+            }
             try q.add(post)
             Console.line("Publishing “\(post.title)” → \(post.platforms.map(\.displayName).joined(separator: ", ")) (\(post.id.uuidString.prefix(8)))")
             if let done = try await Publish.runner(s, queue: q).run(post.id) { Publish.report(done) }

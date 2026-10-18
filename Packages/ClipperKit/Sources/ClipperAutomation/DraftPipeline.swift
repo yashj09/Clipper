@@ -292,6 +292,8 @@ public enum DraftPipeline {
         timeline.provenance = Provenance(template: template.id, templateVersion: template.version, seed: input.settings.seed,
                                          passes: ["cut", "layout", "visual", "captions", "music", "elements"],
                                          inputs: input.record)
+        timeline.metadata = primaryClips.lazy.compactMap(\.analysis.brief).first
+            .map { TimelineMetadata(description: $0.description, hashtags: $0.hashtags) }
         var durations = Dictionary(uniqueKeysWithValues: input.clips.map { ($0.asset.id, $0.asset.info.duration) })
         for a in added { durations[a.id] = a.info.duration }
         for issue in timeline.validate(assetDurations: durations) where issue.severity == .error {

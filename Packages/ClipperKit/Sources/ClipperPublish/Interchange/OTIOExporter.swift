@@ -42,9 +42,9 @@ public struct OTIOExporter: TimelineInterchangeExporter {
             }
         }
 
-        var timelineMeta = try InterchangeModel.jsonObject(Timeline(
-            id: timeline.id, name: timeline.name, canvas: timeline.canvas, tracks: [], styles: timeline.styles,
-            loudnessTarget: timeline.loudnessTarget, attributions: timeline.attributions, provenance: timeline.provenance)) as? [String: Any] ?? [:]
+        var withoutTracks = timeline
+        withoutTracks.tracks = []
+        var timelineMeta = try InterchangeModel.jsonObject(withoutTracks) as? [String: Any] ?? [:]
         timelineMeta["tracks"] = nil
         let root: [String: Any] = [
             "OTIO_SCHEMA": "Timeline.1",

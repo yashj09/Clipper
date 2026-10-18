@@ -21,6 +21,25 @@ import Testing
         #expect(try ClipperJSON.decode(Timeline.self, from: ClipperJSON.encode(old)).provenance?.inputs == nil)
     }
 
+    @Test func draftsTakePublishingMetadataFromTheBriefAndRedraftsKeepIt() throws {
+        var input = talkingInput()
+        #expect(DraftPipeline.run(input).timeline.metadata == nil)
+        input.clips[0].analysis.brief = TranscriptBrief(model: "test", description: "Editing on your Mac.", hashtags: ["editing", "mac"])
+        let tl = DraftPipeline.run(input).timeline
+        let metadata = TimelineMetadata(description: "Editing on your Mac.", hashtags: ["editing", "mac"])
+        #expect(tl.metadata == metadata)
+        #expect(try ClipperJSON.decode(Timeline.self, from: ClipperJSON.encode(tl)).metadata == metadata)
+        var old = tl
+        old.metadata = nil
+        #expect(try ClipperJSON.decode(Timeline.self, from: ClipperJSON.encode(old)).metadata == nil)
+
+        // A redraft without a brief keeps the metadata it had; one with a brief takes the new one.
+        let fresh = DraftPipeline.run(talkingInput()).timeline
+        #expect(Redraft.merge(tl, into: fresh).timeline.metadata == metadata)
+        input.clips[0].analysis.brief?.hashtags = ["new"]
+        #expect(Redraft.merge(tl, into: DraftPipeline.run(input).timeline).timeline.metadata?.hashtags == ["new"])
+    }
+
     @Test func olderTimelinesGetTheirInputsRebuilt() throws {
         let input = talkingInput()
         var tl = DraftPipeline.run(input).timeline

@@ -466,6 +466,14 @@ public struct Marker: Codable, Sendable, Equatable, Identifiable {
     public init(id: UUID = UUID(), time: RationalTime, name: String = "") { self.id = id; self.time = time; self.name = name }
 }
 
+/// What a draft knows about the video for publishing (from the transcript brief), beyond its name.
+public struct TimelineMetadata: Codable, Sendable, Equatable {
+    public var description: String?
+    /// Without "#".
+    public var hashtags: [String]
+    public init(description: String? = nil, hashtags: [String] = []) { self.description = description; self.hashtags = hashtags }
+}
+
 /// The editable document: tracks bottom-to-top (index 0 is drawn first).
 public struct Timeline: Codable, Sendable, Equatable, Identifiable {
     public var id: UUID
@@ -481,16 +489,18 @@ public struct Timeline: Codable, Sendable, Equatable, Identifiable {
     public var provenance: Provenance?
     /// Markers (M), sorted by time.
     public var markers: [Marker]
+    public var metadata: TimelineMetadata?
 
     public init(id: UUID = UUID(), name: String, canvas: Canvas, tracks: [Track] = [], styles: [String: TextStyle] = [:],
-                loudnessTarget: Double? = -14, attributions: [String] = [], provenance: Provenance? = nil, markers: [Marker] = []) {
+                loudnessTarget: Double? = -14, attributions: [String] = [], provenance: Provenance? = nil, markers: [Marker] = [],
+                metadata: TimelineMetadata? = nil) {
         self.id = id; self.name = name; self.canvas = canvas; self.tracks = tracks; self.styles = styles
         self.loudnessTarget = loudnessTarget; self.attributions = attributions; self.provenance = provenance
-        self.markers = markers
+        self.markers = markers; self.metadata = metadata
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, canvas, tracks, styles, loudnessTarget, attributions, provenance, markers
+        case id, name, canvas, tracks, styles, loudnessTarget, attributions, provenance, markers, metadata
     }
 
     public init(from decoder: Decoder) throws {
@@ -504,6 +514,7 @@ public struct Timeline: Codable, Sendable, Equatable, Identifiable {
         attributions = try c.decode([String].self, forKey: .attributions)
         provenance = try c.decodeIfPresent(Provenance.self, forKey: .provenance)
         markers = try c.decodeIfPresent([Marker].self, forKey: .markers) ?? []
+        metadata = try c.decodeIfPresent(TimelineMetadata.self, forKey: .metadata)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -514,6 +525,7 @@ public struct Timeline: Codable, Sendable, Equatable, Identifiable {
         try c.encode(attributions, forKey: .attributions)
         try c.encodeIfPresent(provenance, forKey: .provenance)
         if !markers.isEmpty { try c.encode(markers, forKey: .markers) }
+        try c.encodeIfPresent(metadata, forKey: .metadata)
     }
 
     public var duration: RationalTime { tracks.map(\.end).max() ?? .zero }

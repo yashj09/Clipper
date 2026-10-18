@@ -122,21 +122,43 @@ public struct YouTubePublisher: Publisher {
         return title
     }
 
-    /// `fullDescription` (credits appended), ≤ 5000 bytes. When too long, the free text is cut so the credits survive.
+    /// `fullDescription` (credits appended), ≤ 5000 bytes. When too long, the free text is cut first (ending in "…"),
+    /// then what follows the chapter list (hashtags), then chapters from the end, so the credits always survive and the
+    /// chapters outlast the prose.
     static func description(for request: PublishRequest) -> String {
         let full = sanitize(request.fullDescription)
         guard full.utf8.count > maxDescriptionBytes else { return full }
         let credits = sanitize(String(request.fullDescription.dropFirst(request.description.count)))
-        let ellipsis = "…"
-        let budget = maxDescriptionBytes - credits.utf8.count - ellipsis.utf8.count
+        let budget = maxDescriptionBytes - credits.utf8.count
         guard budget > 0 else {
             var trimmed = credits
             while trimmed.utf8.count > maxDescriptionBytes { trimmed.removeLast() }
             return trimmed
         }
-        var text = sanitize(request.description)
-        while text.utf8.count > budget { text.removeLast() }
-        return text + ellipsis + credits
+        let paragraphs = sanitize(request.description).components(separatedBy: "\n\n")
+        let list = paragraphs.firstIndex(where: isChapterList)
+        var text = list.map { paragraphs[..<$0].joined(separator: "\n\n") } ?? paragraphs.joined(separator: "\n\n")
+        var chapters = list.map { paragraphs[$0].components(separatedBy: "\n") } ?? []
+        var after = list.map { paragraphs[($0 + 1)...].joined(separator: "\n\n") } ?? ""
+        func kept() -> String { [chapters.joined(separator: "\n"), after].filter { !$0.isEmpty }.joined(separator: "\n\n") }
+        let ellipsis = "…", separator = "\n\n"
+        while !kept().isEmpty, kept().utf8.count + (text.isEmpty ? 0 : separator.utf8.count + ellipsis.utf8.count) > budget {
+            if !text.isEmpty { text = "" } else if !after.isEmpty { after = "" } else { chapters.removeLast() }
+        }
+        let rest = kept()
+        let textBudget = budget - ellipsis.utf8.count - (rest.isEmpty ? 0 : separator.utf8.count + rest.utf8.count)
+        if !text.isEmpty {
+            while text.utf8.count > max(textBudget, 0) { text.removeLast() }
+            if !text.isEmpty { text += ellipsis }
+        }
+        return [text, rest].filter { !$0.isEmpty }.joined(separator: separator) + credits
+    }
+
+    /// A paragraph YouTube reads as chapters: every line "m:ss Title", the first at 0:00.
+    static func isChapterList(_ paragraph: String) -> Bool {
+        let lines = paragraph.components(separatedBy: "\n")
+        return lines.first?.hasPrefix("0:00 ") == true
+            && lines.allSatisfy { $0.wholeMatch(of: /\d{1,2}(:\d{2}){1,2} .+/) != nil }
     }
 
     /// Tags without "#" or angle brackets, total length (counting separators) ≤ 500 characters.

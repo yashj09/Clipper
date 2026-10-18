@@ -40,13 +40,15 @@ public enum Redraft {
 
     /// Carries the user's work from `old` into the freshly drafted `fresh`. Kept items go back on the matching track
     /// (same track, else same kind and name, else a recreated one) and win where they overlap new automatic items.
-    /// The old timeline's identity, name, extra styles, credits and track settings (mute, hide, lock, gain) are kept.
+    /// The old timeline's identity, name, extra styles, credits and track settings (mute, hide, lock, gain) are kept,
+    /// and its publishing metadata when the new draft has none.
     public static func merge(_ old: Timeline, into fresh: Timeline, context: EditContext = EditContext()) -> Result {
         var t = fresh
         t.id = old.id
         t.name = old.name
         for (k, v) in old.styles where t.styles[k] == nil { t.styles[k] = v }
         for a in old.attributions where !t.attributions.contains(a) { t.attributions.append(a) }
+        t.metadata = t.metadata ?? old.metadata
 
         var used = Set<TrackID>()
         var keptIDs = Set<ItemID>()
