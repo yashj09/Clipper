@@ -52,7 +52,6 @@ import Testing
     func vlogInput(_ sentences: [String] = speech, pauses: [Double] = [0.2, 1.0, 1.2, 2.5]) -> DraftInput {
         var input = talkingInput()
         input.template = BuiltIns.vlog
-        input.template.rules.silenceCut?.speedUp = SpeedUpRule()
         input.clips[0].analysis.transcript = transcript(sentences, pauses: pauses)
         return input
     }
@@ -83,6 +82,28 @@ import Testing
             #expect(abs(ref.source.end.seconds - items[i + 1].ref.source.start.seconds) < 1e-6, "the pause runs straight into speech")
         }
         #expect(r.report.notes.contains { $0.hasPrefix("Sped up 2 pauses (") && $0.hasSuffix(" at 2.5x)") }, "\(r.report.notes)")
+    }
+
+    @Test func onlyTheVlogTemplateSpeedsUpPausesAndOldRulesDecodeWithoutIt() throws {
+        #expect(BuiltIns.vlog.rules.silenceCut?.speedUp == SpeedUpRule())
+        #expect(BuiltIns.talkingHead.rules.silenceCut?.speedUp == nil)
+        #expect(BuiltIns.gameplay.rules.silenceCut?.speedUp == nil)
+        let old = #"{"minGap": 0.5, "padBefore": 0.1, "padAfter": 0.2, "removeFillers": true}"#
+        #expect(try ClipperJSON.decode(SilenceCutRule.self, from: Data(old.utf8)).speedUp == nil)
+        let rule = BuiltIns.vlog.rules.silenceCut!
+        #expect(try ClipperJSON.decode(SilenceCutRule.self, from: ClipperJSON.encode(rule)) == rule)
+    }
+
+    @Test(arguments: stride(from: 0.1, to: 0.2, by: 0.01).map { $0 })
+    func fastPauseRunningIntoTheMediaEndStaysContinuous(tail: Double) {
+        var input = vlogInput(["we walked down to the beach", "then we looked out"], pauses: [1.0])
+        let words = input.clips[0].analysis.transcript!.words
+        // The padded speech reaches the media end, and for some tails its rounded length overshoots it.
+        input.clips[0].asset = videoAsset("speaker", seconds: words.last!.end + tail)
+        let items = refs(DraftPipeline.run(input))
+        #expect(items.map(\.ref.speed) == [1, 2.5, 1])
+        #expect(abs(items[1].ref.source.end.seconds - items[2].ref.source.start.seconds) < 1e-6)
+        #expect(items[2].ref.source.end <= input.clips[0].asset.info.duration)
     }
 
     @Test func vlogDraftsAreDeterministic() throws {

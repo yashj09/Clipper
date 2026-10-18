@@ -77,11 +77,11 @@ public enum BuiltIns {
         music: MusicPolicy(moods: ["upbeat", "energetic", "happy"], minBPM: 90, maxBPM: 140, gain: -4, fadeIn: 0, fadeOut: 1.5))
 
     public static let vlog = Template(
-        id: "vlog", name: "Vlog / travel", summary: "Talking moments and B-roll, gentle pause removal, clean subtitles, warm music.",
+        id: "vlog", name: "Vlog / travel", summary: "Talking moments and B-roll, short pauses played fast instead of cut, clean subtitles, warm music.",
         contentType: .vlog, canvas: Canvas(width: 1080, height: 1920, frameRate: .fps30),
         slots: [Slot(id: "footage", name: "Footage", role: .primary, reframe: .face)],
         elements: [title("title-clean", seconds: 3)],
-        rules: Rules(maxDuration: 90, silenceCut: SilenceCutRule(minGap: 0.7, padBefore: 0.15, padAfter: 0.25),
+        rules: Rules(maxDuration: 90, silenceCut: SilenceCutRule(minGap: 0.7, padBefore: 0.15, padAfter: 0.25, speedUp: SpeedUpRule()),
                      beatSnap: BeatSnapRule(), captions: CaptionRule(style: "clean-subtitle"), duck: DuckRule(depth: 10), maxSilentClip: 4),
         music: MusicPolicy(moods: ["inspiring", "chill", "happy", "cinematic"], minBPM: 70, maxBPM: 130, gain: -18))
 

@@ -74,7 +74,7 @@ Ingest → probe → mezzanine/proxy → analysis jobs (transcript, speechActivi
 |---|---|---|
 | 1 | InstantiateSkeleton | Fill template slots by role and order |
 | 2 | SpeechPlan | Per clip, in source time: drop stutters and restarts, keep one take of a repeated line (last complete or best) and mark it, tag kept words with emphasis cues. The cutter subtracts what it excludes |
-| 3 | SilenceCut | **Snap word edges to voice activity first.** Transcriber end times run 130–500 ms early. The only voice-activity detector is the RMS envelope; noisy audio has no dedicated VAD yet, so its edges snap less accurately. Then cut gaps longer than minGap, pad 80/120 ms, and drop fillers (transcribed fillers plus voiced audio with no word) |
+| 3 | SilenceCut | **Snap word edges to voice activity first.** Transcriber end times run 130–500 ms early. The only voice-activity detector is the RMS envelope; noisy audio has no dedicated VAD yet, so its edges snap less accurately. Then cut gaps longer than minGap, pad 80/120 ms, and drop fillers (transcribed fillers plus voiced audio with no word). With `speedUp` (on in vlog), a cut pause up to `maxPause` (1.5 s) with no filler or edit in it is kept between the padded speech and played at `rate` (2.5x), so the footage runs on without a jump; fit drops these first and beat snapping and zoom steps leave them alone |
 | 4 | FitDuration | Drop the segments with the fewest words per second until under maxDuration |
 | 5 | PickMusic | Score by mood + BPM range + length fit; end on a phrase or downbeat; add CC attribution |
 | 6 | BeatSnap | Move cut points to the nearest beat (never inside speech) |

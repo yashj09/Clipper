@@ -108,10 +108,16 @@ public enum DraftPipeline {
         var previous: (seg: Segment, sourceEnd: Double)?
         for seg in segments {
             let clip = input.clips[seg.clip]
-            let continues = previous.map { $0.seg.clip == seg.clip && abs($0.seg.end - seg.start) < 1e-6 } ?? false
-            let sourceStart = continues ? previous!.sourceEnd : seg.start
+            let carried = previous.flatMap { $0.seg.clip == seg.clip && abs($0.seg.end - seg.start) < 1e-6 ? $0.sourceEnd : nil }
+            let continues = carried != nil
+            let sourceStart = carried ?? seg.start
             let start = cursor
-            let end = RationalTime.frames(start.seconds + (seg.end - sourceStart) / seg.speed, rate)
+            let length = (seg.end - sourceStart) / seg.speed
+            var end = RationalTime.frames(start.seconds + length, rate)
+            // Rounded up past the end of the media, clampSource would pull the source back over the previous item's.
+            if continues, sourceStart + (end - start).seconds * seg.speed > clip.asset.info.duration.seconds {
+                end = RationalTime(seconds: start.seconds + length).floorToFrame(rate)
+            }
             guard end > start else { continue }
             let range = TimeRange(start: start, end: end)
             var item = Item(id: ids.uuid(), name: clip.asset.name, range: range,
