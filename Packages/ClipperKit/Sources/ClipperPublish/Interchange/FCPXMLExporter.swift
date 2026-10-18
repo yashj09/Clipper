@@ -16,6 +16,8 @@ import Foundation
 /// - **Connected clips**: every other track's items anchor to the spine element covering their start. Visual tracks
 ///   above the primary get lanes 1, 2, … (bottom to top), visual tracks below it −1, −2, …, and audio/music tracks
 ///   continue the negative lanes. Anchored `offset`s are in the parent's local time (`parent.start + (t − parent.offset)`).
+/// - **Markers**: each timeline marker → `<marker>` (one frame, `value` = its name) on the spine element under it, in
+///   that element's local time like an anchored offset.
 /// - **Times** are exact rationals on the sequence frame grid (`"1001/30000s"`, `"45/30s"`, `"3s"`): item edges are
 ///   rounded to whole frames once, so spine offsets are contiguous by construction. Source `start`s sit on the asset's
 ///   own grid (video: its nominal rate, audio: its sample rate).
@@ -92,6 +94,7 @@ private struct FCPXMLBuilder {
         /// The element's local time at its first frame (its `start`).
         let localStart: RationalTime
         var anchored: [(offset: RationalTime, lane: Int, element: XMLElement)] = []
+        var markers: [XMLElement] = []
     }
 
     let options: FCPXMLExporter
@@ -361,11 +364,23 @@ private struct FCPXMLBuilder {
             for placed in orphans { attach(placed, track: tracks[p], lane: max(lane, 1), to: &nodes, builder: &self) }
         }
 
+        for marker in timeline.markers {
+            let f = grid.frames(marker.time)
+            guard let i = nodes.lastIndex(where: { $0.offset <= f }), f < nodes[i].offset + nodes[i].duration else { continue }
+            let el = XMLElement(name: "marker")
+            el.attr("start", time(nodes[i].localStart + grid.time(f - nodes[i].offset)))
+            el.attr("duration", seq(1))
+            el.attr("value", marker.name.isEmpty ? "Marker" : marker.name)
+            nodes[i].markers.append(el)
+        }
+
         let spine = XMLElement(name: "spine")
         for node in nodes {
             for a in node.anchored.sorted(by: { $0.offset != $1.offset ? $0.offset < $1.offset : $0.lane < $1.lane }) {
                 node.element.addChild(a.element)
             }
+            // DTD order: anchored items, then markers.
+            for m in node.markers { node.element.addChild(m) }
             spine.addChild(node.element)
         }
         return (spine, total)

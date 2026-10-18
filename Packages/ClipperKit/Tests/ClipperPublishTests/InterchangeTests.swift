@@ -72,6 +72,14 @@ enum Fixture {
                                  "caption": TextStyle(box: .init(color: RGBA(0, 0, 0, 0.5)))])
     }
 
+    /// The fixture with markers on A1, the gap and the 2× clip.
+    static var markedTimeline: Timeline {
+        var t = timeline
+        t.markers = [Marker(time: s(1.5), name: "Chapter: Intro"), Marker(time: s(3.5), name: "Chapter: Gap"),
+                     Marker(time: s(8), name: "Retake")]
+        return t
+    }
+
     /// 1920×1080 @ 29.97: clips on frames [0,45) and [46,100).
     static var ntscTimeline: Timeline {
         let rate = FrameRate.ntsc30
@@ -372,6 +380,7 @@ let uvx: String? = ["/opt/homebrew/bin/uvx", "/usr/local/bin/uvx", NSHomeDirecto
             ("fixture-titles-1.10", fixture, FCPXMLExporter(version: .v1_10, captionMode: .titles)),
             ("fixture-pip-primary", fixture, FCPXMLExporter(primaryTrack: fixture.tracks[1].id)),
             ("ntsc", Fixture.ntscTimeline, FCPXMLExporter()),
+            ("markers", Fixture.markedTimeline, FCPXMLExporter()),
         ]
         let out = env["CLIPPER_INTERCHANGE_OUT"].map { URL(fileURLWithPath: $0) }
         if let out {
@@ -393,6 +402,20 @@ let uvx: String? = ["/opt/homebrew/bin/uvx", "/usr/local/bin/uvx", NSHomeDirecto
             let result = try run(xmllint, args)
             #expect(result.status == 0, "\(name): \(result.output)")
         }
+    }
+
+    @Test func fcpxmlMarkersSitOnTheSpineInLocalTime() throws {
+        let (_, doc) = try fcpxmlDocument(Fixture.markedTimeline)
+        let markers = doc.nodes("//spine/*/marker")
+        #expect(markers.map { $0.attribute(forName: "value")?.stringValue } == ["Chapter: Intro", "Chapter: Gap", "Retake"])
+        #expect(markers.map { $0.parent?.name } == ["asset-clip", "gap", "asset-clip"])
+        // A1 starts at source 10 s; the gap at 0; the 2× clip's local time is retimed (source 20 s → local 10 s).
+        #expect(markers.map { fcpTime($0.attribute(forName: "start")?.stringValue).map { Double($0.0) / Double($0.1) } } == [11.5, 0.5, 11])
+        #expect(markers.allSatisfy { same(fcpTime($0.attribute(forName: "duration")?.stringValue), (1, 30)) })
+        // After the clip's anchored items (DTD order).
+        let a1 = try #require(markers.first?.parent as? XMLElement)
+        let names = (a1.children ?? []).compactMap(\.name)
+        #expect(names.lastIndex(where: { $0 != "marker" })! < names.firstIndex(of: "marker")!)
     }
 
     // MARK: - OTIO
@@ -455,6 +478,17 @@ let uvx: String? = ["/opt/homebrew/bin/uvx", "/usr/local/bin/uvx", NSHomeDirecto
         let gen = try #require((caps[1]["media_references"] as? [String: Any])?["DEFAULT_MEDIA"] as? [String: Any])
         #expect(gen["OTIO_SCHEMA"] as? String == "GeneratorReference.1" && gen["generator_kind"] as? String == "clipper.caption")
         #expect((gen["parameters"] as? [String: Any])?["text"] as? String == "hi there")
+    }
+
+    @Test func otioMarkersOnTheStack() throws {
+        let data = try OTIOExporter().export(Fixture.markedTimeline, assets: Fixture.assets)
+        let root = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let markers = try #require((root["tracks"] as? [String: Any])?["markers"] as? [[String: Any]])
+        #expect(markers.map { $0["name"] as? String } == ["Chapter: Intro", "Chapter: Gap", "Retake"])
+        #expect(markers.allSatisfy { $0["OTIO_SCHEMA"] as? String == "Marker.2" && $0["color"] as? String == "ORANGE" })
+        let ranges = markers.compactMap { $0["marked_range"] as? [String: Any] }
+        #expect(ranges.compactMap { ($0["start_time"] as? [String: Any])?["value"] as? Double } == [45, 105, 240])
+        #expect(ranges.allSatisfy { ($0["duration"] as? [String: Any])?["value"] as? Double == 1 })
     }
 
     /// Opt-in: reads the file with the real `opentimelineio` package (`CLIPPER_OTIO_PYTHON=1`, needs `uvx`).

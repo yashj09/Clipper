@@ -17,6 +17,7 @@ import Foundation
 ///   their exact sub-frame value as a fractional frame count.
 /// - **Speed**: `LinearTimeWarp.1(time_scalar = speed)`; per OTIO convention the clip's `source_range.duration` is
 ///   its duration on the track and `start_time` is the source in-point.
+/// - Timeline markers → `Marker.2` on the top-level stack, one frame long, colour `ORANGE`.
 /// - **Everything else** (transform, opacity, gain keyframes/ducking, fades, caption words, styles, track gain…)
 ///   travels losslessly under `metadata["clipper"]`: `item` is the encoded `Item`, `track` the track without items,
 ///   `timeline` the timeline without tracks. Other tools ignore it; a Clipper importer can rebuild the timeline.
@@ -57,7 +58,7 @@ public struct OTIOExporter: TimelineInterchangeExporter {
                 "children": tracks,
                 "source_range": NSNull(),
                 "effects": [Any](),
-                "markers": [Any](),
+                "markers": timeline.markers.map(writer.marker),
                 "enabled": true,
                 "metadata": [String: Any](),
             ] as [String: Any],
@@ -115,6 +116,12 @@ private struct Writer {
             "markers": [Any](),
             "metadata": ["clipper": clipper],
         ]
+    }
+
+    func marker(_ marker: Marker) -> [String: Any] {
+        ["OTIO_SCHEMA": "Marker.2", "name": marker.name, "color": "ORANGE",
+         "marked_range": range(Double(grid.frames(marker.time)), 1),
+         "metadata": ["clipper": ["id": marker.id.uuidString]]]
     }
 
     func gap(_ frames: Int64) -> [String: Any] {
