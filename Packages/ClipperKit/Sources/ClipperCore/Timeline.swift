@@ -170,7 +170,9 @@ extension ColorAdjust {
         for rule in rules {
             let measured = max(rule.measure(adjust), 1e-3)
             guard abs(measured - rule.target) > rule.deadBand else { continue }
-            let value = min(max(rule.gain * rule.full(measured, rule.target), -rule.limit), rule.limit)
+            var value = min(max(rule.gain * rule.full(measured, rule.target), -rule.limit), rule.limit)
+            // Dull footage gets a lift; vivid footage (a sunset, neon) is a choice, not a fault, so it is never pulled down.
+            if rule.control == \.saturation { value = max(value, 0) }
             adjust[keyPath: rule.control] = (value * 100).rounded() / 100
         }
         return adjust

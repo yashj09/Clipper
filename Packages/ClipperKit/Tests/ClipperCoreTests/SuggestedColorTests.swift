@@ -40,9 +40,9 @@ import Testing
         #expect(abs(warm.temperature) <= 0.25 && abs(green.tint) <= 0.15)
     }
 
-    @Test func saturationNudgesTowardTarget() {
+    @Test func saturationLiftsDullFootageAndLeavesVividAlone() {
         #expect(ColorAdjust.suggested(for: Self.stats { $0.saturation = 0.15 }).saturation > 0)
-        #expect(ColorAdjust.suggested(for: Self.stats { $0.saturation = 0.8 }).saturation < 0)
+        #expect(ColorAdjust.suggested(for: Self.stats { $0.saturation = 0.8 }).saturation == 0)
     }
 
     @Test func noneLookChangesNothing() {
