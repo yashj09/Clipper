@@ -72,7 +72,14 @@ public enum DraftPipeline {
                     report.notes.append(String(format: "Removed %.1fs of pauses and fillers (%d segments kept)", before - after - edits, segments.count))
                 }
             }
-            if let maxDuration { segments = Cutting.fit(segments, maxDuration: maxDuration, report: &report) }
+            if let maxDuration {
+                // Split only to trim by importance: density ranks whole segments.
+                if segments.reduce(0, { $0 + $1.timelineDuration }) > maxDuration, Cutting.scored(segments) {
+                    segments = Cutting.splitAtSentences(segments)
+                }
+                segments = Cutting.fit(segments, maxDuration: maxDuration, report: &report)
+            }
+            segments = Cutting.joinContinuous(segments)
             if wantsMusic, let snapRule = rules.beatSnap {
                 let total = segments.reduce(0) { $0 + $1.timelineDuration }
                 music = Music.pick(input.music, policy: template.music, target: total, wantEnergy: nil,

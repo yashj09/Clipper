@@ -168,18 +168,29 @@ enum Cutting {
         }
     }
 
-    /// Drops the least dense segments (never the first: it carries the hook) until the total fits, then trims the
-    /// last segment at a word boundary if needed. Fast pauses have no words, so they go first, each leaving the hard
+    /// Whether the brief scores all the speech here, so trimming can go by importance. Fast pauses never have words.
+    static func scored<C: Collection<Segment>>(_ segments: C) -> Bool {
+        segments.contains { $0.importance != nil } && segments.allSatisfy { $0.speed != 1 || $0.importance != nil }
+    }
+
+    /// Drops segments (never the first: it carries the hook) until the total fits, then trims the last segment at a
+    /// word boundary if needed. With a brief scoring every candidate, the least important go first, ties to the least
+    /// dense; otherwise the least dense. Ties go to the latest. Fast pauses go before any speech, each leaving the hard
     /// cut the pause would have had without the speed-up.
     static func fit(_ segments: [Segment], maxDuration: Double, report: inout DraftReport) -> [Segment] {
         var segs = segments
         var total = segs.reduce(0) { $0 + $1.timelineDuration }
         guard total > maxDuration else { return segs }
-        var dropped = 0
+        let byImportance = scored(segs.dropFirst())
+        func rank(_ i: Int) -> (Int, Double, Double, Double) {
+            let s = segs[i]
+            return (s.speed == 1 ? 1 : 0, byImportance ? s.importance ?? 0 : 0, s.density, -Double(i))
+        }
+        var dropped = 0, droppedSpeech = 0
         while total > maxDuration, segs.count > 1 {
-            let candidates = segs.indices.dropFirst()
-            guard let worst = candidates.min(by: { (segs[$0].density, -Double($0)) < (segs[$1].density, -Double($1)) }) else { break }
+            guard let worst = segs.indices.dropFirst().min(by: { rank($0) < rank($1) }) else { break }
             total -= segs[worst].timelineDuration
+            if segs[worst].speed == 1 { droppedSpeech += 1 }
             segs.remove(at: worst)
             dropped += 1
         }
@@ -191,8 +202,12 @@ enum Cutting {
             last.words = last.words.filter { $0.end <= last.end }
             segs.append(last)
         }
-        report.notes.append(String(format: "Trimmed to %.1fs (max %.0fs) by dropping %d low-density segment%@",
-                                   segs.reduce(0) { $0 + $1.timelineDuration }, maxDuration, dropped, dropped == 1 ? "" : "s"))
+        let fitted = segs.reduce(0) { $0 + $1.timelineDuration }
+        report.notes.append(byImportance
+            ? String(format: "Trimmed to %.1fs (max %.0fs) by dropping %d low-importance sentence%@",
+                     fitted, maxDuration, droppedSpeech, droppedSpeech == 1 ? "" : "s")
+            : String(format: "Trimmed to %.1fs (max %.0fs) by dropping %d low-density segment%@",
+                     fitted, maxDuration, dropped, dropped == 1 ? "" : "s"))
         return segs
     }
 

@@ -5,7 +5,7 @@ import Testing
 
 let briefSpeech = [
     "Welcome back today we test an automatic editor.",
-    "Everything runs locally on your own machine.",
+    "Everything runs locally on your own fast machine with no waiting.",
     "There are no subscriptions and no uploads at all!",
     "Timing off by a few frames gets noticed.",
 ]
@@ -65,5 +65,38 @@ func segments(_ input: DraftInput) -> [Segment] {
         let clip = speakerClip(tr)
         let segs = Cutting.segments(for: 0, clip: clip, rule: SilenceCutRule(), plan: SpeechPlan(clip: clip, rule: nil))
         #expect(Cutting.splitAtSentences(segs) == segs)
+    }
+}
+
+/// Source seconds the primary track plays, as (start, end) pairs.
+func primarySource(_ t: Timeline) -> [(Double, Double)] {
+    t.tracks[0].items.compactMap(\.content.mediaRef).map { ($0.source.start.seconds, $0.source.end.seconds) }
+}
+
+func plays(_ t: Timeline, _ w: TranscriptWord) -> Bool {
+    primarySource(t).contains { $0.0 <= (w.start + w.end) / 2 && (w.start + w.end) / 2 < $0.1 }
+}
+
+@Suite struct ImportanceFitTests {
+    @Test func overBudgetDropsTheLeastImportantSentenceNotTheSparsest() throws {
+        let brief = TranscriptBrief(model: "m", sentenceImportance: [0.9, 0.1, 0.8, 0.7])
+        let input = briefedInput(brief)
+        let pieces = Cutting.splitAtSentences(segments(input))
+        let sparsest = try #require(pieces.dropFirst().min { $0.density < $1.density })
+        #expect(sparsest.words[0].sentence != 1)
+        let total = pieces.reduce(0) { $0 + $1.timelineDuration }
+        let r = DraftPipeline.run(briefedInput(brief, maxDuration: total - 0.5))
+        let words = input.clips[0].analysis.transcript!.words
+        let sentences = Transcript.sentences(words)
+        #expect(!sentences[1].contains { plays(r.timeline, words[$0]) })
+        for s in [0, 2, 3] { #expect(sentences[s].allSatisfy { plays(r.timeline, words[$0]) }) }
+        #expect(r.report.notes.contains { $0.hasPrefix("Trimmed to") && $0.hasSuffix("by dropping 1 low-importance sentence") })
+    }
+
+    @Test func withoutABriefTrimmingGoesByDensity() {
+        let total = segments(briefedInput(nil)).reduce(0) { $0 + $1.timelineDuration }
+        let r = DraftPipeline.run(briefedInput(nil, maxDuration: total - 0.5))
+        #expect(r.report.notes.contains { $0.contains("low-density segment") })
+        #expect(r.timeline.tracks[0].items.count == 1)
     }
 }
