@@ -134,9 +134,11 @@ func plays(_ t: Timeline, _ w: TranscriptWord) -> Bool {
 
     @Test func nothingMovesWithoutAUsableHook() {
         let plain = draft(hook: nil).timeline
-        #expect(draft(hook: 0).timeline == plain)
-        #expect(draft(hook: 2, rule: HookRule(maxSeconds: 2)).timeline == plain)
-        #expect(draft(hook: 2, rule: nil).timeline == plain)
+        // A brief always leaves its description and hashtags on the timeline; only the edit must stay the same.
+        func edit(_ t: Timeline) -> Timeline { var t = t; t.metadata = nil; return t }
+        #expect(edit(draft(hook: 0).timeline) == plain)
+        #expect(edit(draft(hook: 2, rule: HookRule(maxSeconds: 2)).timeline) == plain)
+        #expect(edit(draft(hook: 2, rule: nil).timeline) == plain)
         var template = BuiltIns.talkingHead
         template.rules.hook = nil
         #expect(DraftPipeline.run(briefedInput(nil, template: template)).timeline == plain)
