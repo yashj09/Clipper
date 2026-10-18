@@ -319,6 +319,9 @@ public enum DraftPipeline {
         if let open = coldOpen {
             timeline.markers.append(Marker(id: ids.uuid(), time: .zero, name: "Hook: “\(Hook.excerpt(open.text))”"))
         }
+        for chapter in Speech.chapterMarkers(plans, clips: input.clips, items: primaryItems, rate: rate) {
+            timeline.markers.append(Marker(id: ids.uuid(), time: chapter.time, name: chapter.name))
+        }
         timeline.markers.sort { $0.time < $1.time }
 
         // Captions above titles above everything else; audio-only tracks last.

@@ -214,3 +214,25 @@ func plays(_ t: Timeline, _ w: TranscriptWord) -> Bool {
         #expect(!captions.items.contains { if case .caption(let c) = $0.content { c.text.contains("💸") } else { false } })
     }
 }
+
+@Suite struct ChapterMarkerTests {
+    @Test func chaptersMarkWhereTheyPlay() throws {
+        let words = briefedInput(nil).clips[0].analysis.transcript!.words
+        // The 1.6 s pause after sentence 1 is cut; its first half is more than a second before the kept footage.
+        let deepInCut = words[18].end + 0.3
+        let brief = TranscriptBrief(model: "m", chapters: [
+            .init(start: words[0].start - 0.4, title: "Intro"), .init(start: deepInCut, title: "In a cut"),
+            .init(start: words[19].start, title: "No cloud"), .init(start: words[19].start + 1, title: "Too close"),
+            .init(start: words[28].start, title: "Timing"),
+        ])
+        let t = DraftPipeline.run(briefedInput(brief)).timeline
+        #expect(t.markers.map(\.name) == ["Chapter: Intro", "Chapter: No cloud", "Chapter: Timing"])
+        #expect(t.markers[0].time == .zero)
+        let marker = try #require(t.markers.first { $0.name == "Chapter: No cloud" })
+        let item = try #require(t.tracks[0].items.first { $0.range.contains(marker.time) })
+        let ref = try #require(item.content.mediaRef)
+        let source = ref.source.start.seconds + (marker.time - item.start).seconds
+        #expect(abs(source - words[19].start) <= t.canvas.frameRate.frameDuration.seconds)
+        #expect(DraftPipeline.run(briefedInput(brief)).timeline == t)
+    }
+}

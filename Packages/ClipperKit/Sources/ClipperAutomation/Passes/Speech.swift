@@ -286,6 +286,28 @@ enum Speech {
         return found.sorted { $0.time < $1.time }.map { Marker(id: ids.uuid(), time: $0.time, name: $0.name) }
     }
 
+    /// One marker per chapter of each speech clip's brief, where the chapter's first moment plays on the timeline.
+    /// A chapter starts at its first word's transcribed start, which runs early, so a start up to a second before kept
+    /// footage marks where that footage begins. Chapters that start further into cut material, or within 3 s of the
+    /// chapter marker before, get none.
+    static func chapterMarkers(_ plans: [Int: SpeechPlan], clips: [ClipInput], items: [Item], rate: FrameRate) -> [(time: RationalTime, name: String)] {
+        var found: [(time: RationalTime, name: String)] = []
+        for i in plans.keys.sorted() {
+            let clip = clips[i]
+            for chapter in clip.analysis.brief?.chapters ?? [] {
+                let t = chapter.start
+                guard let item = items.filter({ $0.content.mediaRef.map { $0.asset == clip.asset.id && $0.source.end.seconds > t } ?? false })
+                    .min(by: { $0.content.mediaRef!.source.start < $1.content.mediaRef!.source.start }),
+                      let ref = item.content.mediaRef, ref.source.start.seconds - t <= 1 else { continue }
+                let offset = max(0, t - ref.source.start.seconds) / ref.speed
+                found.append((RationalTime.frames(item.start.seconds + offset, rate), "Chapter: \(chapter.title)"))
+            }
+        }
+        var kept: [(time: RationalTime, name: String)] = []
+        for m in found.sorted(by: { $0.time < $1.time }) where kept.last.map({ (m.time - $0.time).seconds >= 3 }) ?? true { kept.append(m) }
+        return kept
+    }
+
     /// Words on the timeline with their cues, from each primary item's segment.
     static func timedWords(_ items: [Item], segments: [ItemID: Segment]) -> [TimedWord] {
         var out: [TimedWord] = []
