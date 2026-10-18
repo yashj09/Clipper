@@ -26,6 +26,24 @@ public struct Transcript: Codable, Sendable, Equatable {
         self.locale = locale; self.engine = engine; self.words = words
     }
     public var text: String { words.map(\.text).joined(separator: " ") }
+
+    /// Sentences as ranges of `words`: one ends after a word ending in ".", "?" or "!", or where the next non-filler
+    /// word starts 0.8 s or more after it. Everything that numbers sentences uses this split, so a sentence index
+    /// (`TranscriptBrief.hookSentence`) means the same words everywhere.
+    public static func sentences(_ words: [TranscriptWord]) -> [Range<Int>] {
+        var out: [Range<Int>] = []
+        var start = 0
+        for i in words.indices {
+            let next = words[(i + 1)...].first { !$0.isFiller }
+            let gap = next.map { $0.start - words[i].end } ?? 0
+            if words[i].text.last.map({ ".?!".contains($0) }) == true || gap >= 0.8 {
+                out.append(start..<(i + 1))
+                start = i + 1
+            }
+        }
+        if start < words.count { out.append(start..<words.count) }
+        return out
+    }
 }
 
 /// A uniformly sampled scalar series (e.g. RMS in dBFS every 10 ms).
@@ -165,6 +183,33 @@ public struct KeywordTags: Codable, Sendable, Equatable {
     public init(tags: [Tag]) { self.tags = tags }
 }
 
+/// What a local LLM said about a whole transcript. Sentence indices refer to `Transcript.sentences(_:)`.
+public struct TranscriptBrief: Codable, Sendable, Equatable {
+    public struct Chapter: Codable, Sendable, Equatable {
+        /// Source seconds.
+        public var start: Double
+        public var title: String
+        public init(start: Double, title: String) { self.start = start; self.title = title }
+    }
+    public var model: String
+    /// At most 60 characters, no emoji, no quotes.
+    public var title: String?
+    public var hookSentence: Int?
+    /// One 0…1 score per sentence, in order; empty when unknown.
+    public var sentenceImportance: [Double]
+    public var chapters: [Chapter]
+    /// One to three sentences for a video description.
+    public var description: String?
+    /// Lowercase, without "#", at most 8.
+    public var hashtags: [String]
+    public init(model: String, title: String? = nil, hookSentence: Int? = nil, sentenceImportance: [Double] = [],
+                chapters: [Chapter] = [], description: String? = nil, hashtags: [String] = []) {
+        self.model = model; self.title = title; self.hookSentence = hookSentence
+        self.sentenceImportance = sentenceImportance; self.chapters = chapters; self.description = description
+        self.hashtags = hashtags
+    }
+}
+
 /// Everything known about one asset. Fields are nil until that analyzer has run.
 public struct AssetAnalysis: Codable, Sendable, Equatable {
     public var transcript: Transcript?
@@ -175,11 +220,13 @@ public struct AssetAnalysis: Codable, Sendable, Equatable {
     public var events: SoundEvents?
     public var visual: VisualActivity?
     public var keywords: KeywordTags?
+    /// Only when a local LLM ran (`TranscriptBriefer`); the analysis pipeline never sets it.
+    public var brief: TranscriptBrief?
     public init(transcript: Transcript? = nil, speech: SpeechActivity? = nil, loudness: LoudnessInfo? = nil,
                 faces: FaceTrack? = nil, beats: BeatGrid? = nil, events: SoundEvents? = nil, visual: VisualActivity? = nil,
-                keywords: KeywordTags? = nil) {
+                keywords: KeywordTags? = nil, brief: TranscriptBrief? = nil) {
         self.transcript = transcript; self.speech = speech; self.loudness = loudness; self.faces = faces; self.beats = beats
-        self.events = events; self.visual = visual; self.keywords = keywords
+        self.events = events; self.visual = visual; self.keywords = keywords; self.brief = brief
     }
 }
 

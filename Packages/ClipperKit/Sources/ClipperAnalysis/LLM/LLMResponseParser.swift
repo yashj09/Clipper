@@ -1,13 +1,5 @@
 import Foundation
 
-/// One entry of the model's `{"rankings":[...]}` reply. `id` is the 1-based candidate position in the batch.
-struct LLMRanking: Sendable, Equatable {
-    var id: Int
-    var score: Double
-    var title: String?
-    var reason: String?
-}
-
 /// Lenient parsing of what local models actually send back: markdown fences, `<think>` blocks (Qwen3, DeepSeek-R1),
 /// prose around the JSON, ids as strings, scores as strings.
 enum LLMResponseParser {
@@ -32,9 +24,8 @@ enum LLMResponseParser {
         return out
     }
 
-    /// Rankings from a model reply, or nil if no usable JSON was found.
-    static func rankings(from content: String) -> [LLMRanking]? {
-        let text = stripThinking(content)
+    /// The first balanced JSON value in `text` that `extract` accepts. Scans at most 64 opening brackets.
+    static func firstJSON<T>(in text: String, _ extract: (Any) -> T?) -> T? {
         let bytes = Array(text.utf8)
         var tries = 0
         var i = 0
@@ -44,8 +35,8 @@ enum LLMResponseParser {
             tries += 1
             if let end = balancedEnd(bytes, from: i),
                let value = try? JSONSerialization.jsonObject(with: Data(bytes[i...end]), options: [.fragmentsAllowed]),
-               let rankings = extract(value) {
-                return rankings
+               let result = extract(value) {
+                return result
             }
             i += 1
         }
@@ -85,33 +76,6 @@ enum LLMResponseParser {
             i += 1
         }
         return nil
-    }
-
-    static func extract(_ value: Any) -> [LLMRanking]? {
-        let items: [Any]
-        if let dict = value as? [String: Any] {
-            if let list = dict["rankings"] as? [Any] {
-                items = list
-            } else if dict["id"] != nil, dict["score"] != nil {
-                items = [dict]
-            } else if let list = dict.values.compactMap({ $0 as? [Any] }).first(where: { $0.first is [String: Any] }) {
-                items = list
-            } else {
-                return nil
-            }
-        } else if let list = value as? [Any], list.first is [String: Any] {
-            items = list
-        } else {
-            return nil
-        }
-        let parsed = items.compactMap { ($0 as? [String: Any]).flatMap(ranking) }
-        return parsed.isEmpty && !items.isEmpty ? nil : parsed
-    }
-
-    static func ranking(_ d: [String: Any]) -> LLMRanking? {
-        guard let id = int(d["id"]), let raw = double(d["score"]), raw.isFinite else { return nil }
-        return LLMRanking(id: id, score: min(max(raw, 0), 10), title: d["title"] as? String,
-                          reason: (d["reason"] as? String) ?? (d["why"] as? String))
     }
 
     static func int(_ v: Any?) -> Int? {
