@@ -62,39 +62,51 @@ public actor AnalysisPipeline {
     }
 
     /// Bump a kind's version whenever its algorithm or output format changes; that invalidates only its cache entries.
-    public static func version(of kind: AnalysisKind) -> Int {
-        switch kind {
-        case .speech: 1
-        case .transcript: 2   // 2: Apple transcripts are fed from the shared ingest (Resampler instead of AVAssetReader resampling)
-        case .loudness: 1
-        case .faces: 1
-        case .beats: 1
-        case .events: 1
-        case .visual: 1
-        }
-    }
+    public static func version(of kind: AnalysisKind) -> Int { spec(kind).version }
 
     /// The subset of `kinds` that applies to media described by `info`.
     public static func applicableKinds(_ kinds: Set<AnalysisKind>, for info: MediaInfo) -> Set<AnalysisKind> {
-        kinds.filter { kind in
-            switch kind {
-            case .speech, .transcript, .loudness, .events: info.hasAudio
-            case .faces, .visual: info.hasVideo
-            case .beats: info.kind == .audio && info.hasAudio
-            }
-        }
+        kinds.filter { spec($0).applies(info) }
     }
 
     /// Cache identifier of the analyzer producing `kind` under `options`.
-    public static func analyzerID(_ kind: AnalysisKind, options: AnalysisOptions) -> String {
+    public static func analyzerID(_ kind: AnalysisKind, options: AnalysisOptions) -> String { spec(kind).id(options) }
+
+    /// What the pipeline knows about a kind apart from how to compute it.
+    private struct KindSpec: Sendable {
+        var version: Int
+        var applies: @Sendable (MediaInfo) -> Bool
+        var id: @Sendable (AnalysisOptions) -> String
+        /// Decodes a cached artifact into its `Output` case.
+        var decode: @Sendable (Data) -> Output?
+
+        init<T: Decodable>(version: Int, applies: @escaping @Sendable (MediaInfo) -> Bool,
+                           id: @escaping @Sendable (AnalysisOptions) -> String,
+                           output: @escaping @Sendable (T) -> Output) {
+            self.version = version; self.applies = applies; self.id = id
+            decode = { (try? CacheCodec.decoder.decode(T.self, from: $0)).map(output) }
+        }
+    }
+
+    private static func spec(_ kind: AnalysisKind) -> KindSpec {
         switch kind {
-        case .speech: "speech.rms16k"
-        case .transcript: "transcript.\(options.transcriber.id).\(options.locale.identifier(.bcp47))"
-        case .loudness: "loudness.r128"
-        case .faces: "faces.vision.\(String(format: "%g", options.faces.samplesPerSecond))fps"
-        case .beats: "beats"
-        case .events: "events.\(eventsSignature(options.events))"
-        case .visual: "visual.\(visualSignature(options.visual))"
+        case .speech:
+            KindSpec(version: 1, applies: \.hasAudio, id: { _ in "speech.rms16k" }, output: Output.speech)
+        case .transcript:
+            // 2: Apple transcripts are fed from the shared ingest (Resampler instead of AVAssetReader resampling)
+            KindSpec(version: 2, applies: \.hasAudio,
+                     id: { "transcript.\($0.transcriber.id).\($0.locale.identifier(.bcp47))" }, output: Output.transcript)
+        case .loudness:
+            KindSpec(version: 1, applies: \.hasAudio, id: { _ in "loudness.r128" }, output: Output.loudness)
+        case .faces:
+            KindSpec(version: 1, applies: \.hasVideo,
+                     id: { "faces.vision.\(String(format: "%g", $0.faces.samplesPerSecond))fps" }, output: Output.faces)
+        case .beats:
+            KindSpec(version: 1, applies: { $0.kind == .audio && $0.hasAudio }, id: { _ in "beats" }, output: Output.beats)
+        case .events:
+            KindSpec(version: 1, applies: \.hasAudio, id: { "events.\(eventsSignature($0.events))" }, output: Output.events)
+        case .visual:
+            KindSpec(version: 1, applies: \.hasVideo, id: { "visual.\(visualSignature($0.visual))" }, output: Output.visual)
         }
     }
 
@@ -268,16 +280,7 @@ public actor AnalysisPipeline {
     private static func loadCached(_ kind: AnalysisKind, _ analyzer: String, _ key: AssetKey,
                                    _ cache: (any AnalysisCache)?) async -> Output? {
         guard let cache, let data = await cache.load(key: key, analyzer: analyzer, version: version(of: kind)) else { return nil }
-        let d = CacheCodec.decoder
-        switch kind {
-        case .speech: return (try? d.decode(SpeechActivity.self, from: data)).map(Output.speech)
-        case .transcript: return (try? d.decode(Transcript.self, from: data)).map(Output.transcript)
-        case .loudness: return (try? d.decode(LoudnessInfo.self, from: data)).map(Output.loudness)
-        case .faces: return (try? d.decode(FaceTrack.self, from: data)).map(Output.faces)
-        case .beats: return (try? d.decode(BeatGrid.self, from: data)).map(Output.beats)
-        case .events: return (try? d.decode(SoundEvents.self, from: data)).map(Output.events)
-        case .visual: return (try? d.decode(VisualActivity.self, from: data)).map(Output.visual)
-        }
+        return spec(kind).decode(data)
     }
 
     /// Computes `kind` (a cache miss) and stores it.
