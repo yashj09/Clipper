@@ -37,6 +37,8 @@ struct SpokenWord: Equatable {
     var importance: Double?
     /// From the keyword tags.
     var emoji: String?
+    /// The keyword tag's dictionary form, for any tag but `emphasis`; what B-roll matches clip names against.
+    var lemma: String?
     subscript<T>(dynamicMember path: KeyPath<TranscriptWord, T>) -> T { word[keyPath: path] }
 }
 
@@ -114,7 +116,8 @@ struct SpeechPlan: Equatable {
             let tag = left[i].isFiller ? nil : tags[index]
             var cue = cues[i]
             if let tag, tag.kind != .emphasis, tag.kind != .noun || tag.emoji != nil { cue.insert(.keyword) }
-            return SpokenWord(word: left[i], cue: cue, sentence: sentenceOf[index], importance: scores?[sentenceOf[index]], emoji: tag?.emoji)
+            return SpokenWord(word: left[i], cue: cue, sentence: sentenceOf[index], importance: scores?[sentenceOf[index]], emoji: tag?.emoji,
+                              lemma: tag.flatMap { $0.kind == .emphasis ? nil : $0.lemma })
         }
         self.excluded = excluded
         removedRestarts = drops.count
@@ -317,7 +320,7 @@ enum Speech {
             let a = ref.source.start.seconds, b = ref.source.end.seconds
             for w in seg.words where w.start >= a - 0.02 && w.end <= b + 0.02 {
                 out.append(TimedWord(text: w.text, start: max(w.start + offset, item.start.seconds),
-                                     end: min(w.end + offset, item.end.seconds), isFiller: w.isFiller, cue: w.cue, emoji: w.emoji))
+                                     end: min(w.end + offset, item.end.seconds), isFiller: w.isFiller, cue: w.cue, emoji: w.emoji, lemma: w.lemma))
             }
         }
         return out

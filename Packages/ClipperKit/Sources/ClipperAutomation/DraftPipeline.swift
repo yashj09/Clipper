@@ -108,7 +108,9 @@ public enum DraftPipeline {
         }
 
         // 2. Lay out slots as tracks.
-        let visualSlotsWithClips = template.slots.filter { s in s.role != .logo && !(byslot[s.id] ?? []).isEmpty }
+        let visualSlotsWithClips = template.slots.filter { s in
+            s.role != .logo && !(s.role == .broll && rules.broll != nil) && !(byslot[s.id] ?? []).isEmpty
+        }
         let alone = visualSlotsWithClips.count == 1
         var primaryItems: [Item] = []
         var primaryTrackIndex: Int?
@@ -153,6 +155,7 @@ public enum DraftPipeline {
         }
         let duration = cursor
         if duration == .zero { report.warnings.append("Nothing to place: add clips to the '\(primary.name)' slot") }
+        let spoken = Speech.timedWords(primaryItems, segments: segmentOf)
 
         for slot in template.slots {
             let kind: TrackKind = slot.role == .broll || slot.role == .logo ? .overlay : .video
@@ -164,6 +167,20 @@ public enum DraftPipeline {
             let clips = (byslot[slot.id] ?? []).map { input.clips[$0] }
             if clips.isEmpty {
                 if !slot.optional { report.warnings.append("Slot '\(slot.name)' has no clips") }
+                continue
+            }
+            if slot.role == .broll, let rule = rules.broll {
+                let hook = Speech.timedWords(primaryItems, segments: segmentOf.mapValues { s in
+                    var s = s
+                    s.words = s.words.filter { $0.sentence == input.clips[s.clip].analysis.brief?.hookSentence }
+                    return s
+                })
+                let placed = BRoll.place(clips, words: spoken, keep: hook, rule: rule, slot: slot, duration: duration.seconds,
+                                         rate: rate, ids: &ids)
+                if let note = placed.note { report.notes.append(note) }
+                if let warning = placed.warning { report.warnings.append(warning) }
+                let items = placed.items.map { reframed($0, input: input, slot: slot, transform: slot.transform, canvas: template.canvas) }
+                if !items.isEmpty { timeline.tracks.append(Track(id: ids.uuid(), kind: .overlay, name: slot.name, items: items)) }
                 continue
             }
             let transform = (alone ? slot.aloneTransform : nil) ?? slot.transform
@@ -215,8 +232,7 @@ public enum DraftPipeline {
             timeline.tracks.append(Track(id: ids.uuid(), kind: kind, name: slot.name, items: items))
         }
 
-        // 3. Spoken words on the timeline (zooms, captions, ducking), then the primary-track visual passes.
-        let spoken = Speech.timedWords(primaryItems, segments: segmentOf)
+        // 3. The primary-track visual passes.
         if let pti = primaryTrackIndex {
             var items = timeline.tracks[pti].items
             if primary.reframe != .none {
@@ -343,17 +359,24 @@ public enum DraftPipeline {
         return DraftResult(timeline: timeline, report: report, addedAssets: added)
     }
 
-    /// The analyses a template's rules and slots read. The CLI and the app both request exactly these.
-    public static func analysisKinds(for template: Template) -> Set<AnalysisKind> {
-        var kinds: Set<AnalysisKind> = []
+    /// The analyses a template's rules and slots read for clips in `slot`. Nil means the main clips: every slot but
+    /// the B-roll candidates, which need only their own keywords and what frames them, so a talking head's speaker
+    /// is not decoded again for saliency. The CLI and the app both request exactly these.
+    public static func analysisKinds(for template: Template, slot: String? = nil) -> Set<AnalysisKind> {
         let rules = template.rules
+        let isCandidate = { (s: Slot) in s.role == .broll && rules.broll != nil }
+        func framing(_ slots: [Slot]) -> Set<AnalysisKind> {
+            Set(slots.compactMap { s in s.reframe == .face ? .faces : s.reframe == .saliency ? .visual : nil })
+        }
+        if let s = template.slots.first(where: { $0.id == slot }), isCandidate(s) {
+            return framing([s]).union([.transcript, .keywords])
+        }
+        var kinds: Set<AnalysisKind> = []
         if rules.speechEdits != nil || rules.silenceCut != nil || rules.captions != nil || rules.duck != nil {
             kinds.formUnion([.speech, .transcript])
         }
-        if rules.callouts != nil || rules.captions?.emoji == true { kinds.formUnion([.speech, .transcript, .keywords]) }
-        if template.slots.contains(where: { $0.reframe == .face }) { kinds.insert(.faces) }
-        if template.slots.contains(where: { $0.reframe == .saliency }) { kinds.insert(.visual) }
-        return kinds
+        if rules.callouts != nil || rules.captions?.emoji == true || rules.broll != nil { kinds.formUnion([.speech, .transcript, .keywords]) }
+        return kinds.union(framing(template.slots.filter { !isCandidate($0) }))
     }
 
     // MARK: Helpers

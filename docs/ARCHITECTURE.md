@@ -85,6 +85,7 @@ Ingest → probe → mezzanine/proxy → analysis jobs (transcript, speechActivi
 | 11 | Reframe | Face track → spring-smoothed crop keyframes, simplified with Ramer–Douglas–Peucker |
 | 12 | Duck | Volume ramps on music under speech (−12 dB, 150 ms attack, 400 ms release) |
 | 13 | LoudnessTarget | Applied at export |
+| 14 | BRoll | With `rules.broll` (on in talking head and vlog), a `.broll` slot's clips are cutaway candidates, not a sequence. Where a spoken keyword's lemma equals a word of a candidate's name, tags or own keywords (or begins with one of 5 or more letters), the draft cuts to that candidate for 2.5 s, muted and reframed by saliency, at least 6 s apart and at most 4 a minute, never over the title (first 2.5 s), the last 1.5 s or the hook sentence. Unused candidates win ties; a reused one plays on from where it stopped. Candidates get only keyword and visual analysis, so the speaker is not decoded for saliency |
 
 ## Concurrency
 - Swift 6 strict concurrency throughout.

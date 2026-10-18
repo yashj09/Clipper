@@ -235,6 +235,24 @@ public struct CalloutRule: Codable, Sendable, Equatable {
     }
 }
 
+/// Cutaways to the user's own clips where the speaker names what a clip shows (its name, tags or own keywords).
+public struct BRollRule: Codable, Sendable, Equatable {
+    public var seconds: Double
+    /// Least time between two cutaways' starts.
+    public var minSpacing: Double
+    public var maxPerMinute: Int
+    public init(seconds: Double = 2.5, minSpacing: Double = 6, maxPerMinute: Int = 4) {
+        self.seconds = seconds; self.minSpacing = minSpacing; self.maxPerMinute = maxPerMinute
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self), d = BRollRule()
+        seconds = try c.decodeIfPresent(Double.self, forKey: .seconds) ?? d.seconds
+        minSpacing = try c.decodeIfPresent(Double.self, forKey: .minSpacing) ?? d.minSpacing
+        maxPerMinute = try c.decodeIfPresent(Int.self, forKey: .maxPerMinute) ?? d.maxPerMinute
+    }
+}
+
 public struct Rules: Codable, Sendable, Equatable {
     public var maxDuration: Double?
     /// Speech clean-up decided from the transcript before the silence cut; nil leaves the speech as recorded.
@@ -251,14 +269,16 @@ public struct Rules: Codable, Sendable, Equatable {
     public var maxSilentClip: Double?
     public var hook: HookRule?
     public var callouts: CalloutRule?
+    /// With it, `.broll` slots hold candidates for cutaways instead of being laid out by their fill.
+    public var broll: BRollRule?
 
     public init(maxDuration: Double? = nil, speechEdits: SpeechEditRule? = nil, silenceCut: SilenceCutRule? = nil, beatCut: BeatCutRule? = nil,
                 beatSnap: BeatSnapRule? = nil, punchIn: PunchInRule? = nil, captions: CaptionRule? = nil, duck: DuckRule? = nil, loudnessTarget: Double? = -14,
-                maxSilentClip: Double? = nil, hook: HookRule? = nil, callouts: CalloutRule? = nil) {
+                maxSilentClip: Double? = nil, hook: HookRule? = nil, callouts: CalloutRule? = nil, broll: BRollRule? = nil) {
         self.maxDuration = maxDuration; self.speechEdits = speechEdits; self.silenceCut = silenceCut; self.beatCut = beatCut; self.beatSnap = beatSnap
         self.punchIn = punchIn
         self.captions = captions; self.duck = duck; self.loudnessTarget = loudnessTarget; self.maxSilentClip = maxSilentClip
-        self.hook = hook; self.callouts = callouts
+        self.hook = hook; self.callouts = callouts; self.broll = broll
     }
 }
 

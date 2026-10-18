@@ -9,6 +9,7 @@ struct TimedWord {
     var isFiller: Bool
     var cue: Cue = []
     var emoji: String?
+    var lemma: String?
 }
 
 enum Captions {

@@ -34,6 +34,9 @@ public enum BuiltIns {
 
     // MARK: Templates
 
+    /// Cutaway candidates matched to spoken keywords (`Rules.broll`), not a sequence.
+    static let broll = Slot(id: "broll", name: "B-roll", role: .broll, reframe: .saliency, useAudio: false, optional: true)
+
     static func title(_ style: String, seconds: Double) -> TemplateElement {
         TemplateElement(id: "title", track: .title, content: .text(TextContent(text: "{title}", style: style)),
                         timing: .opening(seconds: seconds), fadeIn: 0.15, fadeOut: 0.3)
@@ -42,12 +45,12 @@ public enum BuiltIns {
     public static let talkingHead = Template(
         id: "talking-head", name: "Talking head", summary: "One speaker, retakes and stutters removed, tight cuts, bold captions, emphasis zooms, music ducked under speech.",
         contentType: .talkingHead, canvas: Canvas(width: 1080, height: 1920, frameRate: .fps30),
-        slots: [Slot(id: "speaker", name: "Speaker", role: .primary, reframe: .face)],
+        slots: [Slot(id: "speaker", name: "Speaker", role: .primary, reframe: .face), broll],
         elements: [title("title-bold", seconds: 2.5)],
         rules: Rules(maxDuration: 60, speechEdits: SpeechEditRule(), silenceCut: SilenceCutRule(minGap: 0.35), beatSnap: BeatSnapRule(),
                      punchIn: PunchInRule(zoom: 1.12, minSpacing: 4),
                      captions: CaptionRule(style: "bold-pop", emoji: true), duck: DuckRule(depth: 14), hook: HookRule(),
-                     callouts: CalloutRule()),
+                     callouts: CalloutRule(), broll: BRollRule()),
         music: MusicPolicy(moods: ["chill", "upbeat", "inspiring"], minBPM: 80, maxBPM: 125, gain: -22))
 
     public static let gameplay = Template(
@@ -83,10 +86,11 @@ public enum BuiltIns {
     public static let vlog = Template(
         id: "vlog", name: "Vlog / travel", summary: "Talking moments and B-roll, short pauses played fast instead of cut, clean subtitles, warm music.",
         contentType: .vlog, canvas: Canvas(width: 1080, height: 1920, frameRate: .fps30),
-        slots: [Slot(id: "footage", name: "Footage", role: .primary, reframe: .face)],
+        slots: [Slot(id: "footage", name: "Footage", role: .primary, reframe: .face), broll],
         elements: [title("title-clean", seconds: 3)],
         rules: Rules(maxDuration: 90, silenceCut: SilenceCutRule(minGap: 0.7, padBefore: 0.15, padAfter: 0.25, speedUp: SpeedUpRule()),
-                     beatSnap: BeatSnapRule(), captions: CaptionRule(style: "clean-subtitle"), duck: DuckRule(depth: 10), maxSilentClip: 4),
+                     beatSnap: BeatSnapRule(), captions: CaptionRule(style: "clean-subtitle"), duck: DuckRule(depth: 10), maxSilentClip: 4,
+                     broll: BRollRule()),
         music: MusicPolicy(moods: ["inspiring", "chill", "happy", "cinematic"], minBPM: 70, maxBPM: 130, gain: -18))
 
     public static let templates: [Template] = [talkingHead, gameplay, montage, vlog]
