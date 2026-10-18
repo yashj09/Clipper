@@ -253,6 +253,17 @@ public struct BRollRule: Codable, Sendable, Equatable {
     }
 }
 
+/// A starting grade on every clip that has measured colour (`ColorAdjust.suggested`).
+public struct ColorRule: Codable, Sendable, Equatable {
+    public var look: ColorAdjust.Look
+    public init(look: ColorAdjust.Look = .natural) { self.look = look }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        look = try c.decodeIfPresent(ColorAdjust.Look.self, forKey: .look) ?? .natural
+    }
+}
+
 public struct Rules: Codable, Sendable, Equatable {
     public var maxDuration: Double?
     /// Speech clean-up decided from the transcript before the silence cut; nil leaves the speech as recorded.
@@ -271,14 +282,17 @@ public struct Rules: Codable, Sendable, Equatable {
     public var callouts: CalloutRule?
     /// With it, `.broll` slots hold candidates for cutaways instead of being laid out by their fill.
     public var broll: BRollRule?
+    public var color: ColorRule?
 
     public init(maxDuration: Double? = nil, speechEdits: SpeechEditRule? = nil, silenceCut: SilenceCutRule? = nil, beatCut: BeatCutRule? = nil,
                 beatSnap: BeatSnapRule? = nil, punchIn: PunchInRule? = nil, captions: CaptionRule? = nil, duck: DuckRule? = nil, loudnessTarget: Double? = -14,
-                maxSilentClip: Double? = nil, hook: HookRule? = nil, callouts: CalloutRule? = nil, broll: BRollRule? = nil) {
+                maxSilentClip: Double? = nil, hook: HookRule? = nil, callouts: CalloutRule? = nil, broll: BRollRule? = nil,
+                color: ColorRule? = nil) {
         self.maxDuration = maxDuration; self.speechEdits = speechEdits; self.silenceCut = silenceCut; self.beatCut = beatCut; self.beatSnap = beatSnap
         self.punchIn = punchIn
         self.captions = captions; self.duck = duck; self.loudnessTarget = loudnessTarget; self.maxSilentClip = maxSilentClip
         self.hook = hook; self.callouts = callouts; self.broll = broll
+        self.color = color
     }
 }
 

@@ -84,8 +84,9 @@ Ingest → probe → mezzanine/proxy → analysis jobs (transcript, speechActivi
 | 10 | PunchIns | One zoom curve over the track. Cued words zoom in or out at least minSpacing apart, stepping on a cut just before them; a slow push fills any stretch over maxStill with no cut or zoom. No move straddles a cut |
 | 11 | Reframe | Face track → spring-smoothed crop keyframes, simplified with Ramer–Douglas–Peucker |
 | 12 | Duck | Volume ramps on music under speech (−12 dB, 150 ms attack, 400 ms release) |
-| 13 | LoudnessTarget | Applied at export |
+| 13 | Colour | With `rules.color` (on in talking head, vlog and montage; off in gameplay, whose screen content is graded as captured): every clip with measured `color` stats gets `ColorAdjust.suggested(for:look:)` on its items on the video and overlay tracks, unless the item already has a grade. Runs after every pass that places footage |
 | 14 | BRoll | With `rules.broll` (on in talking head and vlog), a `.broll` slot's clips are cutaway candidates, not a sequence. Where a spoken keyword's lemma equals a word of a candidate's name, tags or own keywords (or begins with one of 5 or more letters), the draft cuts to that candidate for 2.5 s, muted and reframed by saliency, at least 6 s apart and at most 4 a minute, never over the title (first 2.5 s), the last 1.5 s or the hook sentence. Unused candidates win ties; a reused one plays on from where it stopped. Candidates get only keyword and visual analysis, so the speaker is not decoded for saliency |
+| 15 | LoudnessTarget | Applied at export |
 
 ## Concurrency
 - Swift 6 strict concurrency throughout.

@@ -330,6 +330,13 @@ public enum DraftPipeline {
             }
         }
 
+        // 8. Colour: after every pass that places footage.
+        if let rule = rules.color {
+            let c = Visual.colour(timeline.tracks, clips: input.clips, rule: rule)
+            timeline.tracks = c.tracks
+            if c.matched > 0 { report.notes.append("Colour-matched \(c.matched) clip\(c.matched == 1 ? "" : "s")") }
+        }
+
         // Drawn last so no earlier ID depends on how many retakes there were.
         timeline.markers = Speech.takeMarkers(plans, clips: input.clips, items: primaryItems, rate: rate, ids: &ids)
         if let open = coldOpen {
@@ -369,13 +376,14 @@ public enum DraftPipeline {
             Set(slots.compactMap { s in s.reframe == .face ? .faces : s.reframe == .saliency ? .visual : nil })
         }
         if let s = template.slots.first(where: { $0.id == slot }), isCandidate(s) {
-            return framing([s]).union([.transcript, .keywords])
+            return framing([s]).union([.transcript, .keywords]).union(rules.color != nil ? [.color] : [])
         }
         var kinds: Set<AnalysisKind> = []
         if rules.speechEdits != nil || rules.silenceCut != nil || rules.captions != nil || rules.duck != nil {
             kinds.formUnion([.speech, .transcript])
         }
         if rules.callouts != nil || rules.captions?.emoji == true || rules.broll != nil { kinds.formUnion([.speech, .transcript, .keywords]) }
+        if rules.color != nil { kinds.insert(.color) }
         return kinds.union(framing(template.slots.filter { !isCandidate($0) }))
     }
 
