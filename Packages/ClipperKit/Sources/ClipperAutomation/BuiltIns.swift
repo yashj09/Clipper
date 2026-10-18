@@ -41,7 +41,8 @@ public enum BuiltIns {
         contentType: .talkingHead, canvas: Canvas(width: 1080, height: 1920, frameRate: .fps30),
         slots: [Slot(id: "speaker", name: "Speaker", role: .primary, reframe: .face)],
         elements: [title("title-bold", seconds: 2.5)],
-        rules: Rules(maxDuration: 60, silenceCut: SilenceCutRule(minGap: 0.35), punchIn: PunchInRule(zoom: 1.12, minSpacing: 4),
+        rules: Rules(maxDuration: 60, silenceCut: SilenceCutRule(minGap: 0.35), beatSnap: BeatSnapRule(),
+                     punchIn: PunchInRule(zoom: 1.12, minSpacing: 4),
                      captions: CaptionRule(style: "bold-pop"), duck: DuckRule(depth: 14)),
         music: MusicPolicy(moods: ["chill", "upbeat", "inspiring"], minBPM: 80, maxBPM: 125, gain: -22))
 
@@ -81,7 +82,7 @@ public enum BuiltIns {
         slots: [Slot(id: "footage", name: "Footage", role: .primary, reframe: .face)],
         elements: [title("title-clean", seconds: 3)],
         rules: Rules(maxDuration: 90, silenceCut: SilenceCutRule(minGap: 0.7, padBefore: 0.15, padAfter: 0.25),
-                     captions: CaptionRule(style: "clean-subtitle"), duck: DuckRule(depth: 10), maxSilentClip: 4),
+                     beatSnap: BeatSnapRule(), captions: CaptionRule(style: "clean-subtitle"), duck: DuckRule(depth: 10), maxSilentClip: 4),
         music: MusicPolicy(moods: ["inspiring", "chill", "happy", "cinematic"], minBPM: 70, maxBPM: 130, gain: -18))
 
     public static let templates: [Template] = [talkingHead, gameplay, montage, vlog]

@@ -73,7 +73,7 @@ Ingest → probe → mezzanine/proxy → analysis jobs (transcript, speechActivi
 | # | Pass | Summary |
 |---|---|---|
 | 1 | InstantiateSkeleton | Fill template slots by role and order |
-| 2 | SilenceCut | **Snap word edges to voice activity first.** Transcriber end times run 130–500 ms early. Use the RMS envelope for clean audio, Silero VAD for noisy. Then cut gaps longer than minGap, pad 80/120 ms, and drop fillers (transcribed fillers plus voiced audio with no word) |
+| 2 | SilenceCut | **Snap word edges to voice activity first.** Transcriber end times run 130–500 ms early. The only voice-activity detector is the RMS envelope; noisy audio has no dedicated VAD yet, so its edges snap less accurately. Then cut gaps longer than minGap, pad 80/120 ms, and drop fillers (transcribed fillers plus voiced audio with no word) |
 | 3 | FitDuration | Drop the segments with the fewest words per second until under maxDuration |
 | 4 | PickMusic | Score by mood + BPM range + length fit; end on a phrase or downbeat; add CC attribution |
 | 5 | BeatSnap | Move cut points to the nearest beat (never inside speech) |

@@ -64,6 +64,20 @@ public enum DraftPipeline {
                 report.notes.append(String(format: "Removed %.1fs of pauses and fillers (%d segments kept)", before - after, segments.count))
             }
             if let maxDuration { segments = Cutting.fit(segments, maxDuration: maxDuration, report: &report) }
+            if wantsMusic, let snapRule = rules.beatSnap {
+                let total = segments.reduce(0) { $0 + $1.duration }
+                music = Music.pick(input.music, policy: template.music, target: total, wantEnergy: nil,
+                                   forced: input.settings.musicID, seed: input.settings.seed)
+                if let m = music, m.beats != nil {
+                    musicOffset = Music.startOffset(m, alignToBeat: true)
+                    let beats = Music.timelineBeats(m, offset: musicOffset, until: total + snapRule.tolerance)
+                    let snap = Cutting.beatSnap(segments, beats: beats, rule: snapRule, clips: input.clips)
+                    segments = snap.segments
+                    if snap.moved > 0 {
+                        report.notes.append(String(format: "Snapped %d of %d cuts to the beat", snap.moved, segments.count))
+                    }
+                }
+            }
         }
 
         // 2. Lay out slots as tracks.

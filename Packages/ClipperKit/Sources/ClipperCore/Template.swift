@@ -108,6 +108,12 @@ public struct BeatCutRule: Codable, Sendable, Equatable {
     }
 }
 
+public struct BeatSnapRule: Codable, Sendable, Equatable {
+    /// Max distance (seconds) a speech cut may move to land on a beat.
+    public var tolerance: Double
+    public init(tolerance: Double = 0.15) { self.tolerance = tolerance }
+}
+
 public struct PunchInRule: Codable, Sendable, Equatable {
     public var zoom: Double
     /// Minimum seconds between punch-ins.
@@ -138,6 +144,8 @@ public struct Rules: Codable, Sendable, Equatable {
     public var maxDuration: Double?
     public var silenceCut: SilenceCutRule?
     public var beatCut: BeatCutRule?
+    /// Speech cuts (not beat cuts) nudged onto the music's beats.
+    public var beatSnap: BeatSnapRule?
     public var punchIn: PunchInRule?
     public var captions: CaptionRule?
     public var duck: DuckRule?
@@ -146,9 +154,10 @@ public struct Rules: Codable, Sendable, Equatable {
     public var maxSilentClip: Double?
 
     public init(maxDuration: Double? = nil, silenceCut: SilenceCutRule? = nil, beatCut: BeatCutRule? = nil,
-                punchIn: PunchInRule? = nil, captions: CaptionRule? = nil, duck: DuckRule? = nil, loudnessTarget: Double? = -14,
+                beatSnap: BeatSnapRule? = nil, punchIn: PunchInRule? = nil, captions: CaptionRule? = nil, duck: DuckRule? = nil, loudnessTarget: Double? = -14,
                 maxSilentClip: Double? = nil) {
-        self.maxDuration = maxDuration; self.silenceCut = silenceCut; self.beatCut = beatCut; self.punchIn = punchIn
+        self.maxDuration = maxDuration; self.silenceCut = silenceCut; self.beatCut = beatCut; self.beatSnap = beatSnap
+        self.punchIn = punchIn
         self.captions = captions; self.duck = duck; self.loudnessTarget = loudnessTarget; self.maxSilentClip = maxSilentClip
     }
 }

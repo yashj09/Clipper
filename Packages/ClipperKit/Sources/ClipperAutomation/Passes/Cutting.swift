@@ -95,6 +95,36 @@ enum Cutting {
         return segs
     }
 
+    /// Moves each cut, and the final end, onto the nearest timeline beat when it is within `rule.tolerance`, by moving
+    /// the end of the segment before it. Earlier moves shift later cuts, so each cut is measured after the previous
+    /// snap. A cut stays put rather than cross a word, leave the clip, or overlap the next piece of the same clip.
+    static func beatSnap(_ segments: [Segment], beats: [Double], rule: BeatSnapRule,
+                         clips: [ClipInput]) -> (segments: [Segment], moved: Int) {
+        var segs = segments
+        var moved = 0
+        var cut = 0.0
+        for k in segs.indices {
+            cut += segs[k].duration
+            guard let beat = beats.min(by: { abs($0 - cut) < abs($1 - cut) }) else { break }
+            let delta = beat - cut
+            guard delta != 0, abs(delta) <= rule.tolerance else { continue }
+            let seg = segs[k]
+            let clip = clips[seg.clip]
+            let words = clip.analysis.transcript?.words ?? []
+            let newEnd = seg.end + delta
+            var limit = clip.range.upperBound
+            if k + 1 < segs.count, segs[k + 1].clip == seg.clip, segs[k + 1].start >= seg.end { limit = min(limit, segs[k + 1].start) }
+            let lo = min(seg.end, newEnd), hi = max(seg.end, newEnd)
+            guard newEnd <= limit, newEnd - seg.start >= 0.1,
+                  !words.contains(where: { $0.start < hi && $0.end > lo }) else { continue }
+            segs[k].end = newEnd
+            segs[k].words = words.filter { $0.start >= seg.start - 0.05 && $0.end <= newEnd + 0.05 }
+            cut += delta
+            moved += 1
+        }
+        return (segs, moved)
+    }
+
     /// Montage cutting: each clip occupies a whole number of beats (every `rule.everyBeats`, fewer if the clip is short).
     /// Beats are timeline seconds (music already aligned so its first used beat is at 0). Clips are cycled, advancing
     /// through each source on reuse, until `target` is filled.

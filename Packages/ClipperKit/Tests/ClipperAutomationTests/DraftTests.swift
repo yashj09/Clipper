@@ -68,6 +68,47 @@ func talkingInput(seed: UInt64 = 7, title: String? = "Local editing in 60s") -> 
         #expect(Cutting.keepRanges(words: [], speech: [], clip: 2...9, rule: SilenceCutRule()) == [2...9])
     }
 
+    @Test func beatSnapLandsCutsOnBeatsOutsideSpeech() {
+        let input = talkingInput()
+        let clip = input.clips[0]
+        let words = clip.analysis.transcript!.words
+        let segments = Cutting.segments(for: 0, clip: clip, rule: BuiltIns.talkingHead.rules.silenceCut)
+        let track = music("chill", bpm: 96, seconds: 120, moods: ["chill"])
+        let beats = Music.timelineBeats(track, offset: Music.startOffset(track, alignToBeat: true), until: 60)
+        let snap = Cutting.beatSnap(segments, beats: beats, rule: BeatSnapRule(), clips: input.clips)
+
+        #expect(snap.moved > 0)
+        var cut = 0.0
+        var onBeat = 0
+        for seg in snap.segments {
+            cut += seg.duration
+            if beats.contains(where: { abs($0 - cut) < 1e-3 }) { onBeat += 1 }
+            #expect(!words.contains { $0.start < seg.end && seg.end < $0.end }, "segment ends inside a word at \(seg.end)")
+        }
+        #expect(onBeat == snap.moved)
+        #expect(DraftPipeline.run(input).report.notes.contains { $0.hasPrefix("Snapped \(snap.moved) of \(segments.count) cuts") })
+    }
+
+    @Test func beatSnapLeavesCutsFartherThanTheTolerance() {
+        let clip = ClipInput(asset: videoAsset("broll", seconds: 10))
+        let segs = [Segment(clip: 0, start: 0, end: 1, words: [])]
+        let snap = Cutting.beatSnap(segs, beats: [0, 1.5], rule: BeatSnapRule(tolerance: 0.15), clips: [clip])
+        #expect(snap.moved == 0)
+        #expect(snap.segments == segs)
+    }
+
+    @Test func beatSnapNeverMovesACutIntoAWord() {
+        let word = TranscriptWord(text: "next", start: 1.05, end: 1.4)
+        let clip = ClipInput(asset: videoAsset("speaker", seconds: 10),
+                             analysis: AssetAnalysis(transcript: Transcript(locale: "en-US", engine: "test", words: [word])))
+        let segs = [Segment(clip: 0, start: 0, end: 1, words: [])]
+        let snap = Cutting.beatSnap(segs, beats: [0, 1.1], rule: BeatSnapRule(), clips: [clip])
+        #expect(snap.moved == 0)
+        #expect(snap.segments == segs)
+        let silent = Cutting.beatSnap(segs, beats: [0, 1.1], rule: BeatSnapRule(), clips: [ClipInput(asset: clip.asset)])
+        #expect(abs(silent.segments[0].end - 1.1) < 1e-9)
+    }
+
     @Test func fitDropsLowDensitySegmentsButKeepsTheHook() {
         var report = DraftReport()
         let segs = [Segment(clip: 0, start: 0, end: 10, words: Array(repeating: TranscriptWord(text: "w", start: 1, end: 1.2), count: 20)),
