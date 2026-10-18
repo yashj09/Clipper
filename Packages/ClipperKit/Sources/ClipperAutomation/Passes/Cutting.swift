@@ -6,8 +6,8 @@ struct Segment: Equatable {
     var clip: Int
     var start: Double
     var end: Double
-    /// Words inside the segment (source seconds).
-    var words: [TranscriptWord]
+    /// Words inside the segment (source seconds), with their emphasis cues.
+    var words: [SpokenWord]
     var duration: Double { end - start }
     /// Words per second: how "dense" this piece is, for trimming to a max duration.
     var density: Double { duration > 0 ? Double(words.filter { !$0.isFiller }.count) / duration : 0 }
@@ -17,18 +17,21 @@ struct Segment: Equatable {
 enum Cutting {
     /// Source ranges to keep for one clip: speech (non-filler words, or detected voice) merged across short pauses,
     /// padded, with long pauses and fillers cut out. Fillers are transcribed ones plus voiced stretches with no word.
-    /// Clips with no detected speech are kept whole.
+    /// Clips with no detected speech are kept whole. No returned range intersects `excluded`: words in it are not
+    /// kept, no merge crosses it, and padding is cut back at its edges.
     static func keepRanges(words: [TranscriptWord], speech: SpeechActivity?, clip: ClosedRange<Double>,
-                           rule: SilenceCutRule) -> [ClosedRange<Double>] {
+                           rule: SilenceCutRule, excluded: RangeSet<Double> = RangeSet()) -> [ClosedRange<Double>] {
         let inClip: (Double, Double) -> Bool = { s, e in e > clip.lowerBound && s < clip.upperBound }
-        let kept = words.filter { inClip($0.start, $0.end) && !(rule.removeFillers && $0.isFiller) }
+        let kept = words.filter {
+            inClip($0.start, $0.end) && !(rule.removeFillers && $0.isFiller) && !excluded.contains(($0.start + $0.end) / 2)
+        }
         var intervals: [(Double, Double)]
         if !kept.isEmpty {
             intervals = kept.map { (max($0.start, clip.lowerBound), min($0.end, clip.upperBound)) }
         } else {
             intervals = (speech?.spans ?? []).filter { inClip($0.start, $0.end) }.map { (max($0.start, clip.lowerBound), min($0.end, clip.upperBound)) }
         }
-        guard !intervals.isEmpty else { return [clip] }
+        guard !intervals.isEmpty else { return subtracting(excluded, from: [clip]) }
         intervals.sort { $0.0 < $1.0 }
         var fillers = rule.removeFillers ? words.filter { $0.isFiller && $0.end - $0.start >= 0.12 }.map { ($0.start, $0.end) } : []
         // Without words the voice spans are the speech itself, and every one of them would count as unworded.
@@ -42,7 +45,8 @@ enum Cutting {
             let last = merged[merged.count - 1]
             let gap = iv.0 - last.1
             let fillerInGap = fillers.contains { $0.0 >= last.1 - 0.02 && $0.1 <= iv.0 + 0.02 }
-            if gap < rule.minGap && !fillerInGap { merged[merged.count - 1].1 = max(last.1, iv.1) } else { merged.append(iv) }
+            let excludedInGap = iv.0 > last.1 && !excluded.isDisjoint(RangeSet(last.1..<iv.0))
+            if gap < rule.minGap && !fillerInGap && !excludedInGap { merged[merged.count - 1].1 = max(last.1, iv.1) } else { merged.append(iv) }
         }
         // Pad, clamp to the clip, then merge pads that now touch.
         var padded: [(Double, Double)] = []
@@ -50,15 +54,24 @@ enum Cutting {
             let p = (max(clip.lowerBound, s - rule.padBefore), min(clip.upperBound, e + rule.padAfter))
             if let last = padded.last, p.0 <= last.1 { padded[padded.count - 1].1 = max(last.1, p.1) } else { padded.append(p) }
         }
-        return padded.filter { $0.1 - $0.0 >= 0.1 }.map { $0.0...$0.1 }
+        return subtracting(excluded, from: padded.map { $0.0...$0.1 })
     }
 
-    static func segments(for clipIndex: Int, clip: ClipInput, rule: SilenceCutRule?) -> [Segment] {
+    /// `ranges` with `excluded` cut out, dropping slivers under 0.1 s.
+    static func subtracting(_ excluded: RangeSet<Double>, from ranges: [ClosedRange<Double>]) -> [ClosedRange<Double>] {
+        let left = RangeSet(ranges.map { $0.lowerBound..<$0.upperBound }).subtracting(excluded)
+        return left.ranges.filter { $0.upperBound - $0.lowerBound >= 0.1 }.map { $0.lowerBound...$0.upperBound }
+    }
+
+    /// Without a silence-cut rule the clip is kept whole, less what the plan excludes. Segment words come from the
+    /// plan, so cues ride along to layout.
+    static func segments(for clipIndex: Int, clip: ClipInput, rule: SilenceCutRule?, plan: SpeechPlan) -> [Segment] {
         let words = clip.analysis.transcript?.words ?? []
-        let ranges = rule.map { keepRanges(words: words, speech: clip.analysis.speech, clip: clip.range, rule: $0) } ?? [clip.range]
+        let ranges = rule.map { keepRanges(words: words, speech: clip.analysis.speech, clip: clip.range, rule: $0, excluded: plan.excluded) }
+            ?? subtracting(plan.excluded, from: [clip.range])
         return ranges.map { r in
             Segment(clip: clipIndex, start: r.lowerBound, end: r.upperBound,
-                    words: words.filter { $0.start >= r.lowerBound - 0.05 && $0.end <= r.upperBound + 0.05 })
+                    words: plan.words.filter { $0.start >= r.lowerBound - 0.05 && $0.end <= r.upperBound + 0.05 })
         }
     }
 
@@ -123,7 +136,7 @@ enum Cutting {
             guard newEnd <= limit, newEnd - seg.start >= 0.1,
                   !words.contains(where: { $0.start < hi && $0.end > lo }) else { continue }
             segs[k].end = newEnd
-            segs[k].words = words.filter { $0.start >= seg.start - 0.05 && $0.end <= newEnd + 0.05 }
+            segs[k].words = seg.words.filter { $0.end <= newEnd + 0.05 }
             cut += delta
             moved += 1
         }

@@ -85,7 +85,8 @@ func talkingInput(seed: UInt64 = 7, title: String? = "Local editing in 60s") -> 
         let input = talkingInput()
         let clip = input.clips[0]
         let words = clip.analysis.transcript!.words
-        let segments = Cutting.segments(for: 0, clip: clip, rule: BuiltIns.talkingHead.rules.silenceCut)
+        let segments = Cutting.segments(for: 0, clip: clip, rule: BuiltIns.talkingHead.rules.silenceCut,
+                                        plan: SpeechPlan(clip: clip, rule: nil))
         let track = music("chill", bpm: 96, seconds: 120, moods: ["chill"])
         let beats = Music.timelineBeats(track, offset: Music.startOffset(track, alignToBeat: true), until: 60)
         let snap = Cutting.beatSnap(segments, beats: beats, rule: BeatSnapRule(), clips: input.clips)
@@ -124,9 +125,12 @@ func talkingInput(seed: UInt64 = 7, title: String? = "Local editing in 60s") -> 
 
     @Test func fitDropsLowDensitySegmentsButKeepsTheHook() {
         var report = DraftReport()
-        let segs = [Segment(clip: 0, start: 0, end: 10, words: Array(repeating: TranscriptWord(text: "w", start: 1, end: 1.2), count: 20)),
+        func words(_ n: Int, at t: Double) -> [SpokenWord] {
+            Array(repeating: SpokenWord(word: TranscriptWord(text: "w", start: t, end: t + 0.2), cue: []), count: n)
+        }
+        let segs = [Segment(clip: 0, start: 0, end: 10, words: words(20, at: 1)),
                     Segment(clip: 0, start: 12, end: 22, words: []),
-                    Segment(clip: 0, start: 24, end: 34, words: Array(repeating: TranscriptWord(text: "w", start: 25, end: 25.2), count: 25))]
+                    Segment(clip: 0, start: 24, end: 34, words: words(25, at: 25))]
         let out = Cutting.fit(segs, maxDuration: 21, report: &report)
         #expect(out.map(\.start) == [0, 24])
         #expect(out.reduce(0) { $0 + $1.duration } <= 21)

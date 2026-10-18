@@ -22,25 +22,8 @@ public enum HighlightFinder {
 
     // MARK: Candidates
 
-    struct Sentence { var start: Double; var end: Double; var words: [TranscriptWord]; var pauseBefore: Double; var pauseAfter: Double }
-
-    /// Splits a transcript into sentences at end punctuation or long pauses.
-    static func sentences(_ words: [TranscriptWord]) -> [Sentence] {
-        var out: [Sentence] = []
-        var current: [TranscriptWord] = []
-        for (i, w) in words.enumerated() {
-            current.append(w)
-            let next = i + 1 < words.count ? words[i + 1] : nil
-            let gap = next.map { $0.start - w.end } ?? .infinity
-            if w.text.last.map({ ".?!".contains($0) }) == true || gap > 0.8 {
-                out.append(Sentence(start: current[0].start, end: w.end, words: current, pauseBefore: 0, pauseAfter: gap))
-                current = []
-            }
-        }
-        if !current.isEmpty { out.append(Sentence(start: current[0].start, end: current.last!.end, words: current, pauseBefore: 0, pauseAfter: .infinity)) }
-        for i in out.indices { out[i].pauseBefore = i == 0 ? .infinity : out[i].start - out[i - 1].end }
-        return out
-    }
+    /// Candidates start and end on the draft's own sentence boundaries.
+    static func sentences(_ words: [TranscriptWord]) -> [Speech.Sentence] { Speech.sentences(words) }
 
     public static func candidates(_ analysis: AssetAnalysis, duration: Double, options: HighlightOptions) -> [Highlight] {
         let context = Context(analysis: analysis, duration: duration)
@@ -110,7 +93,7 @@ public enum HighlightFinder {
                                          "stop", "nobody", "everyone", "actually", "insane", "crazy", "biggest", "first", "only",
                                          "truth", "wrong", "here's", "this"]
 
-    static func score(_ a: Double, _ b: Double, sentences: [Sentence], context: Context, options: HighlightOptions) -> Highlight {
+    static func score(_ a: Double, _ b: Double, sentences: [Speech.Sentence], context: Context, options: HighlightOptions) -> Highlight {
         let d = b - a
         var signals: [String: Double] = [:]
         var reasons: [(Double, String)] = []

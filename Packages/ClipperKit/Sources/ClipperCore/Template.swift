@@ -125,6 +125,20 @@ public struct PunchInRule: Codable, Sendable, Equatable {
     }
 }
 
+/// Speech clean-up decided from the transcript before cutting. Keys missing from JSON take the defaults, so `{}`
+/// turns every edit on.
+public struct SpeechEditRule: Codable, Sendable, Equatable {
+    /// Cut stutters ("the the", "I, I think") and restarts ("So the, so the main thing is").
+    public var falseStarts: Bool
+    public init(falseStarts: Bool = true) { self.falseStarts = falseStarts }
+
+    enum CodingKeys: String, CodingKey { case falseStarts }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        falseStarts = try c.decodeIfPresent(Bool.self, forKey: .falseStarts) ?? true
+    }
+}
+
 public struct DuckRule: Codable, Sendable, Equatable {
     /// How far music drops under speech, in dB (positive number).
     public var depth: Double
@@ -142,6 +156,8 @@ public struct CaptionRule: Codable, Sendable, Equatable {
 
 public struct Rules: Codable, Sendable, Equatable {
     public var maxDuration: Double?
+    /// Speech clean-up decided from the transcript before the silence cut; nil leaves the speech as recorded.
+    public var speechEdits: SpeechEditRule?
     public var silenceCut: SilenceCutRule?
     public var beatCut: BeatCutRule?
     /// Speech cuts (not beat cuts) nudged onto the music's beats.
@@ -153,10 +169,10 @@ public struct Rules: Codable, Sendable, Equatable {
     /// Clips without speech are trimmed to at most this long (their middle), e.g. travel B-roll.
     public var maxSilentClip: Double?
 
-    public init(maxDuration: Double? = nil, silenceCut: SilenceCutRule? = nil, beatCut: BeatCutRule? = nil,
+    public init(maxDuration: Double? = nil, speechEdits: SpeechEditRule? = nil, silenceCut: SilenceCutRule? = nil, beatCut: BeatCutRule? = nil,
                 beatSnap: BeatSnapRule? = nil, punchIn: PunchInRule? = nil, captions: CaptionRule? = nil, duck: DuckRule? = nil, loudnessTarget: Double? = -14,
                 maxSilentClip: Double? = nil) {
-        self.maxDuration = maxDuration; self.silenceCut = silenceCut; self.beatCut = beatCut; self.beatSnap = beatSnap
+        self.maxDuration = maxDuration; self.speechEdits = speechEdits; self.silenceCut = silenceCut; self.beatCut = beatCut; self.beatSnap = beatSnap
         self.punchIn = punchIn
         self.captions = captions; self.duck = duck; self.loudnessTarget = loudnessTarget; self.maxSilentClip = maxSilentClip
     }

@@ -54,8 +54,11 @@ public enum DraftPipeline {
             }
         } else {
             for (i, clip) in input.clips.enumerated() where (clip.slot ?? primary.id) == primary.id {
-                segments += Cutting.segments(for: i, clip: clip, rule: rules.silenceCut)
+                let plan = SpeechPlan(clip: clip, rule: rules.speechEdits)
+                report.removedRestarts += plan.removedRestarts
+                segments += Cutting.segments(for: i, clip: clip, rule: rules.silenceCut, plan: plan)
             }
+            if let note = report.speechEditNote { report.notes.append(note) }
             let before = primaryClips.reduce(0) { $0 + $1.range.upperBound - $1.range.lowerBound }
             if let maxSilent = rules.maxSilentClip { segments = Cutting.trimSilent(segments, maxLength: maxSilent) }
             let after = segments.reduce(0) { $0 + $1.duration }
@@ -280,7 +283,9 @@ public enum DraftPipeline {
     public static func analysisKinds(for template: Template) -> Set<AnalysisKind> {
         var kinds: Set<AnalysisKind> = []
         let rules = template.rules
-        if rules.silenceCut != nil || rules.captions != nil || rules.duck != nil { kinds.formUnion([.speech, .transcript]) }
+        if rules.speechEdits != nil || rules.silenceCut != nil || rules.captions != nil || rules.duck != nil {
+            kinds.formUnion([.speech, .transcript])
+        }
         if template.slots.contains(where: { $0.reframe == .face }) { kinds.insert(.faces) }
         if template.slots.contains(where: { $0.reframe == .saliency }) { kinds.insert(.visual) }
         return kinds
