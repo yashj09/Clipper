@@ -29,6 +29,10 @@ struct Cue: OptionSet, Sendable, Hashable {
 struct SpokenWord: Equatable {
     var word: TranscriptWord
     var cue: Cue
+    /// Index into `Transcript.sentences` of the clip's whole transcript, the numbering the LLM brief uses.
+    var sentence: Int = 0
+    /// The brief's score for `sentence`; nil without a brief that scores every sentence.
+    var importance: Double?
     subscript<T>(dynamicMember path: KeyPath<TranscriptWord, T>) -> T { word[keyPath: path] }
 }
 
@@ -70,7 +74,13 @@ struct SpeechPlan: Equatable {
     init(clip: ClipInput, rule: SpeechEditRule?) {
         let range = clip.range
         let transcript = clip.analysis.transcript
-        let all = (transcript?.words ?? []).filter { $0.end > range.lowerBound && $0.start < range.upperBound }
+        let every = transcript?.words ?? []
+        let inClip = every.indices.filter { every[$0].end > range.lowerBound && every[$0].start < range.upperBound }
+        let all = inClip.map { every[$0] }
+        var sentenceOf = [Int](repeating: 0, count: every.count)
+        let sentenceRanges = Transcript.sentences(every)
+        for (s, r) in sentenceRanges.enumerated() { for i in r { sentenceOf[i] = s } }
+        let scores = clip.analysis.brief.flatMap { $0.sentenceImportance.count == sentenceRanges.count ? $0.sentenceImportance : nil }
         let english = transcript.map { Locale.Language(identifier: $0.locale).languageCode == .english } ?? false
         let drops = rule?.falseStarts == true ? Speech.restarts(all, english: english) : []
         var excluded = RangeSet<Double>()
@@ -79,7 +89,8 @@ struct SpeechPlan: Equatable {
             excluded.insert(contentsOf: Speech.cut(all, dropping: span, clipEnd: range.upperBound))
             dropped.insert(integersIn: span.lowerBound...span.upperBound)
         }
-        let left = all.indices.filter { !dropped.contains($0) }.map { all[$0] }
+        let survivors = all.indices.filter { !dropped.contains($0) }
+        let left = survivors.map { all[$0] }
         let sentences = Speech.sentences(left)
         let groups = rule?.takes.map { Speech.takeGroups(left, sentences: sentences, policy: $0) } ?? []
         var retaken = IndexSet()
@@ -93,7 +104,10 @@ struct SpeechPlan: Equatable {
             return Retake(kept: left[keep.lowerBound].start..<left[keep.upperBound - 1].end, take: g.kept, takes: g.takes.count, removed: cuts)
         }
         let cues = Speech.cues(left, sentences: sentences, speech: clip.analysis.speech, english: english)
-        words = left.indices.filter { !retaken.contains($0) }.map { SpokenWord(word: left[$0], cue: cues[$0]) }
+        words = left.indices.filter { !retaken.contains($0) }.map { i in
+            let sentence = sentenceOf[inClip[survivors[i]]]
+            return SpokenWord(word: left[i], cue: cues[i], sentence: sentence, importance: scores?[sentence])
+        }
         self.excluded = excluded
         removedRestarts = drops.count
     }

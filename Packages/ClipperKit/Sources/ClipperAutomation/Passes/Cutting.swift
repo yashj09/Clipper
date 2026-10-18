@@ -16,6 +16,11 @@ struct Segment: Equatable {
     /// Words per second: how "dense" this piece is, for trimming to a max duration.
     var density: Double { duration > 0 ? Double(words.filter { !$0.isFiller }.count) / duration : 0 }
     var hasSpeech: Bool { words.contains { !$0.isFiller } }
+    /// The brief's score of the most important sentence spoken here; nil without words or when any word is unscored.
+    var importance: Double? {
+        let scores = words.compactMap(\.importance)
+        return !words.isEmpty && scores.count == words.count ? scores.max() : nil
+    }
 }
 
 enum Cutting {
@@ -111,6 +116,45 @@ enum Cutting {
             let words = p.speed == 1 ? plan.words.filter { $0.start >= r.lowerBound - 0.05 && $0.end <= r.upperBound + 0.05 } : []
             return Segment(clip: clipIndex, start: r.lowerBound, end: r.upperBound, words: words, speed: p.speed)
         }
+    }
+
+    /// Speech segments split where one sentence ends and the next begins, at the middle of the pause between them, so
+    /// trimming and reordering move whole sentences. The pieces are source-contiguous: `joinContinuous` puts back
+    /// whatever stays together. A pause under 0.08 s leaves no clean place to cut, so both sentences stay in one piece.
+    static func splitAtSentences(_ segments: [Segment]) -> [Segment] {
+        segments.flatMap { seg -> [Segment] in
+            guard seg.speed == 1 else { return [seg] }
+            var out: [Segment] = []
+            var piece = seg
+            piece.words = []
+            for w in seg.words {
+                if let last = piece.words.last, last.sentence != w.sentence, w.start - last.end >= 0.08 {
+                    let mid = (last.end + w.start) / 2
+                    var done = piece
+                    done.end = mid
+                    out.append(done)
+                    piece.start = mid
+                    piece.words = []
+                }
+                piece.words.append(w)
+            }
+            out.append(piece)
+            return out
+        }
+    }
+
+    /// Neighbours that play one clip straight through at one speed, merged back into one segment.
+    static func joinContinuous(_ segments: [Segment]) -> [Segment] {
+        var out: [Segment] = []
+        for seg in segments {
+            if let last = out.last, last.clip == seg.clip, last.speed == seg.speed, last.end == seg.start {
+                out[out.count - 1].end = seg.end
+                out[out.count - 1].words += seg.words
+            } else {
+                out.append(seg)
+            }
+        }
+        return out
     }
 
     /// Clips without speech (B-roll) are trimmed to their middle `maxLength` seconds.
