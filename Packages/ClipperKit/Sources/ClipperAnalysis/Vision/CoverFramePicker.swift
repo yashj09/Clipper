@@ -8,7 +8,7 @@ import Vision
 
 /// A frame worth using as a video's cover (thumbnail).
 public struct CoverCandidate: Codable, Sendable, Equatable {
-    /// Source seconds.
+    /// Source seconds (`CoverFramePicker`) or timeline seconds (`TimelineCover`).
     public var time: Double
     public var score: Double
     /// What contributed to the score, for display.
@@ -41,8 +41,12 @@ public enum CoverFramePicker {
         let samples = analysis.visual?.samples ?? []
         let inside = samples.filter { $0.time >= margin && $0.time <= duration - margin }
         let faceTimes = analysis.faces?.samples.map(\.time) ?? []
-        let ranked = (inside.isEmpty ? samples : inside).map { score($0, faceTimes: faceTimes) }
-            .sorted { $0.score != $1.score ? $0.score > $1.score : $0.time < $1.time }
+        return best((inside.isEmpty ? samples : inside).map { score($0, faceTimes: faceTimes) }, count: count)
+    }
+
+    /// The `count` highest-scoring candidates, best first, at least `spacing` apart.
+    static func best(_ candidates: [CoverCandidate], count: Int) -> [CoverCandidate] {
+        let ranked = candidates.sorted { $0.score != $1.score ? $0.score > $1.score : $0.time < $1.time }
         var picked: [CoverCandidate] = []
         for candidate in ranked where picked.count < count {
             if picked.allSatisfy({ abs($0.time - candidate.time) >= spacing }) { picked.append(candidate) }

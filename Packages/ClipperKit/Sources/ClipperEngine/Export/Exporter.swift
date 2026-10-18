@@ -93,6 +93,23 @@ public enum Exporter {
         }
     }
 
+    /// The frame of `timeline` at `time` as an export renders it (captions, titles, callouts, colour), at most
+    /// `maxWidth` pixels wide.
+    public static func renderFrame(_ timeline: Timeline, assets: [AssetID: MediaAsset], at time: RationalTime,
+                                   maxWidth: Int = 1080) async throws -> CGImage {
+        let canvas = timeline.canvas
+        let width = max(2, min(maxWidth, canvas.width))
+        let height = max(2, Int((Double(canvas.height) * Double(width) / Double(canvas.width)).rounded()))
+        let built = try await CompositionBuilder.build(timeline, assets: assets,
+                                                       options: BuildOptions(outputSize: CGSize(width: width, height: height)))
+        let generator = AVAssetImageGenerator(asset: built.composition)
+        generator.videoComposition = built.videoComposition
+        generator.requestedTimeToleranceBefore = .zero
+        generator.requestedTimeToleranceAfter = .zero
+        let last = RationalTime.max(.zero, timeline.duration - canvas.frameRate.frameDuration)
+        return try await generator.image(at: RationalTime.min(time.floorToFrame(canvas.frameRate), last).cmTime).image
+    }
+
     /// Integrated loudness of the timeline's final audio mix (nil when it has no audio).
     public static func measureMix(_ timeline: Timeline, assets: [AssetID: MediaAsset]) async throws -> LoudnessInfo? {
         try await measureMix(try await CompositionBuilder.build(timeline, assets: assets), capturingTo: nil)

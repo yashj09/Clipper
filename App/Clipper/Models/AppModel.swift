@@ -342,6 +342,35 @@ final class AppModel {
         }
     }
 
+    /// Writes the open timeline's best cover frame, rendered like its export (captions, titles, colour), as a JPEG.
+    func saveCover(to url: URL) async {
+        guard let editor, let library else { return }
+        let timeline = editor.timeline
+        let assets = editor.assets
+        let pipeline = AnalysisPipeline(cache: library.analysisCache,
+                                        options: AnalysisOptions(locale: Locale(identifier: settings.automation.transcriptionLocale)))
+        let clips = Set((timeline.tracks.first { $0.kind == .video }?.items ?? []).compactMap { $0.content.mediaRef?.asset })
+            .compactMap { assets[$0] }.filter { $0.info.kind == .video }
+        activity = Activity(title: "Cover image", detail: "Looking for the best frame")
+        do {
+            var analyses: [AssetID: AssetAnalysis] = [:]
+            for asset in clips { analyses[asset.id] = try await pipeline.analyze(asset, kinds: [.visual, .faces]) }
+            guard let best = TimelineCover.pick(timeline: timeline, analyses: analyses, count: 1).first else {
+                activity = nil
+                alert = "No frame of this timeline could be sampled for a cover."
+                return
+            }
+            let frame = try await Exporter.renderFrame(timeline, assets: assets, at: RationalTime(seconds: best.time),
+                                                       maxWidth: timeline.canvas.width)
+            try StillRenderer.writeJPEG(frame, to: url)
+            activity = nil
+            NSWorkspace.shared.activateFileViewerSelecting([url])
+        } catch {
+            activity = nil
+            alert = "Couldn't save the cover image: \(error)"
+        }
+    }
+
     // MARK: Music
 
     func addStarterPack() async {

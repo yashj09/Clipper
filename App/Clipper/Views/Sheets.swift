@@ -155,6 +155,16 @@ struct ExportSheet: View {
                     Button("OpenTimelineIO (.otio)…") { dismiss(); model.exportInterchange(fcpxml: false) }
                 }
                 .fixedSize()
+                Button("Save cover image…") {
+                    guard let editor = model.editor else { return }
+                    let panel = NSSavePanel()
+                    panel.nameFieldStringValue = "\(editor.project.name)-cover.jpg"
+                    panel.allowedContentTypes = [.jpeg]
+                    panel.directoryURL = (try? model.library?.exportFolder())
+                    guard panel.runModal() == .OK, let url = panel.url else { return }
+                    dismiss()
+                    Task { await model.saveCover(to: url) }
+                }
                 Spacer()
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
                 Button("Export…") {

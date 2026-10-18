@@ -24,6 +24,16 @@ public enum StillRenderer {
         return try await generator.image(at: .zero).image
     }
 
+    /// Writes `image` as a JPEG (creating the folder).
+    public static func writeJPEG(_ image: CGImage, to url: URL, quality: Double = 0.9) throws {
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        guard let dest = CGImageDestinationCreateWithURL(url as CFURL, UTType.jpeg.identifier as CFString, 1, nil) else {
+            throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: url.path])
+        }
+        CGImageDestinationAddImage(dest, image, [kCGImageDestinationLossyCompressionQuality: quality] as CFDictionary)
+        guard CGImageDestinationFinalize(dest) else { throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: url.path]) }
+    }
+
     /// Writes `image` as a PNG (creating the folder).
     public static func writePNG(_ image: CGImage, to url: URL) throws {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
