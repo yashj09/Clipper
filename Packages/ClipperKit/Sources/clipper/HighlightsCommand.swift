@@ -22,8 +22,7 @@ struct Highlights: AsyncParsableCommand {
     @Option(help: "Minimum length (s).") var min: Double = 20
     @Option(help: "Maximum length (s).") var max: Double = 60
     @Option(help: "Preferred length (s).") var target: Double = 35
-    @Option(help: "Local LLM to re-rank: ollama, lmstudio, mlx, or a base URL like http://localhost:8080/v1.") var llm: String?
-    @Option(help: "Model name for --llm.") var model: String?
+    @OptionGroup(title: "Local LLM re-ranking") var llm: LLMOptions
     @Option(name: .shortAndLong, help: "Template for the drafts.") var template = "talking-head"
     @Flag(help: "Create a project with one timeline per highlight.") var draft = false
     @Flag(help: "Export every drafted highlight (implies --draft).") var export = false
@@ -44,14 +43,7 @@ struct Highlights: AsyncParsableCommand {
         let options = HighlightOptions(minDuration: min, maxDuration: max, targetDuration: target, count: top)
         var picks = HighlightFinder.find(analysis, duration: asset.info.duration.seconds, options: options)
 
-        if let llm {
-            var endpoint: LLMEndpoint = switch llm.lowercased() {
-            case "ollama": .ollama
-            case "lmstudio", "lm-studio": .lmStudio
-            case "mlx": .mlxServer
-            default: LLMEndpoint(baseURL: try Self.serverURL(llm), model: model ?? "default")
-            }
-            if let model { endpoint.model = model }
+        if let endpoint = try llm.endpoint() {
             let ranker = LocalLLMRanker(endpoint: endpoint)
             if await ranker.isAvailable() {
                 // Give the model a wider pool than we keep, so it can promote good ones the heuristics underrated.
@@ -94,6 +86,26 @@ struct Highlights: AsyncParsableCommand {
                 try await s.export(tl, project: project.name, preset: preset ?? template.exportPreset, to: nil)
             }
         }
+    }
+
+}
+
+/// `--llm` / `--model`: which local OpenAI-compatible server to ask, shared by every command that can use one.
+struct LLMOptions: ParsableArguments {
+    @Option(help: "Local LLM: ollama, lmstudio, mlx, or a base URL like http://localhost:8080/v1.") var llm: String?
+    @Option(help: "Model name for --llm.") var model: String?
+
+    /// nil without `--llm`.
+    func endpoint() throws -> LLMEndpoint? {
+        guard let llm else { return nil }
+        var endpoint: LLMEndpoint = switch llm.lowercased() {
+        case "ollama": .ollama
+        case "lmstudio", "lm-studio": .lmStudio
+        case "mlx": .mlxServer
+        default: LLMEndpoint(baseURL: try Self.serverURL(llm), model: model ?? "default")
+        }
+        if let model { endpoint.model = model }
+        return endpoint
     }
 
     /// A `--llm` base URL: absolute http(s) with a host, e.g. http://localhost:8080/v1.

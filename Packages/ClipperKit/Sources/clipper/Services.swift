@@ -57,11 +57,60 @@ struct Services {
             if let t = a.transcript { parts.append("\(t.words.count) words") }
             if let s = a.speech { parts.append(String(format: "%.0fs speech", s.spans.reduce(0) { $0 + $1.duration })) }
             if let f = a.faces { parts.append("\(f.samples.count) face samples") }
+            if let k = a.keywords { parts.append("\(k.tags.count) keywords") }
             if let e = a.events { parts.append("\(e.events.count) sound events") }
             if let v = a.visual { parts.append("\(v.samples.count) visual samples, \(v.sceneCuts.count) cuts") }
             Console.line(String(format: "  ✓ %@ (%@) %.1fs", asset.name, parts.joined(separator: ", "), (ContinuousClock.now - start).seconds))
         }
         return result
+    }
+
+    /// Asks the local LLM for a brief of each transcribed asset (cached in the library) and stores it in `analysis`.
+    /// Without a reachable server, or when the model fails, the draft goes ahead without briefs.
+    func addBriefs(to analysis: inout [AssetID: AssetAnalysis], assets: [MediaAsset], endpoint: LLMEndpoint, print: Bool) async {
+        let llm = LocalLLM(endpoint: endpoint)
+        guard await llm.isAvailable() else {
+            if let ids = try? await llm.models(), endpoint.nonLocalReason == nil {
+                Console.line("⚠️ \(endpoint.baseURL.absoluteString) has no model “\(endpoint.model)” (it has: \(ids.joined(separator: ", "))); drafting without a brief.")
+            } else {
+                Console.line("⚠️ No local LLM at \(endpoint.baseURL.absoluteString); drafting without a brief. (e.g. `ollama serve` + `ollama pull \(endpoint.model)`)")
+            }
+            return
+        }
+        let briefer = TranscriptBriefer(endpoint: endpoint, cache: library.analysisCache)
+        for asset in assets {
+            guard let transcript = analysis[asset.id]?.transcript, !transcript.words.isEmpty else { continue }
+            let start = ContinuousClock.now
+            do {
+                let brief = try await briefer.brief(transcript, key: asset.key, context: asset.name) { p in
+                    Console.progress(p, "Briefing \(asset.name) with \(endpoint.model)")
+                }
+                Console.clearStatus()
+                analysis[asset.id]?.brief = brief
+                Console.line(String(format: "  ✓ %@ brief (%@) %.1fs", asset.name, endpoint.model, (ContinuousClock.now - start).seconds))
+                if print { Console.line(Self.describe(brief, transcript: transcript)) }
+            } catch {
+                Console.clearStatus()
+                Console.line("⚠️ Brief of \(asset.name) failed: \(error)")
+            }
+        }
+    }
+
+    static func describe(_ brief: TranscriptBrief, transcript: Transcript) -> String {
+        let sentences = Transcript.sentences(transcript.words).map { r in
+            transcript.words[r].filter { !$0.isFiller }.map(\.text).joined(separator: " ")
+        }
+        var lines = ["Brief (\(brief.model)):"]
+        lines.append("  Title: \(brief.title ?? "-")")
+        lines.append("  Hook: " + (brief.hookSentence.map { "[\($0)] “\(sentences[$0])”" } ?? "-"))
+        lines.append("  Description: \(brief.description ?? "-")")
+        lines.append("  Hashtags: " + (brief.hashtags.isEmpty ? "-" : brief.hashtags.map { "#" + $0 }.joined(separator: " ")))
+        lines.append("  Chapters: " + (brief.chapters.isEmpty ? "-" : brief.chapters.map {
+            "\(HighlightFinder.clock($0.start)) \($0.title)" }.joined(separator: "; ")))
+        let top = brief.sentenceImportance.enumerated().sorted { $0.element > $1.element }.prefix(3)
+        lines.append("  Importance: \(brief.sentenceImportance.count) of \(sentences.count) sentences; top "
+                     + top.map { String(format: "[%d] %.2f", $0.offset, $0.element) }.joined(separator: ", "))
+        return lines.joined(separator: "\n")
     }
 
     func templates() throws -> [Template] { BuiltIns.templates + (try library.userTemplates()) }

@@ -96,6 +96,8 @@ Ingest → probe → mezzanine/proxy → analysis jobs (transcript, speechActivi
    - `speech` + `transcript`: streaming SpeechTranscriber. Word edges are snapped to voice activity.
    - `events`: SoundAnalysis classifier v1. Laughter, applause, cheering, shouting, crowd, booing and gasp labels are merged into events.
    - `visual`: about 1 sample per second from keyframe-near frames (AVAssetImageGenerator with tolerance, 256 px). Measures colour-histogram plus pixel change, adaptive scene cuts, and a Vision attention-saliency box.
+   - `keywords` (`KeywordTagger`): NaturalLanguage part-of-speech, name and lemma tags on the final transcript mark numbers, names, content nouns and shouted words, each with an emoji from `KeywordEmoji.table` when one fits.
+   - Outside the pipeline, `TranscriptBriefer` asks the local LLM (`LocalLLM`, the same localhost-only client as the ranker) for a title, hook sentence, per-sentence importance, chapters, description and hashtags. Transcripts over 1500 words are split into parts and the answers combined. `clipper draft --llm` and the app's draft (when the local LLM is on in Settings) use its title when none is given.
 
    Results are cached by content key, so re-running is instant.
 2. **Candidates** (`HighlightFinder`, pure):

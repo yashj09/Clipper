@@ -211,17 +211,27 @@ final class AppModel {
             alert = "Analysis failed: \(error)"
             return nil
         }
+        if let endpoint = llmEndpoint, await LocalLLM(endpoint: endpoint).isAvailable() {
+            let briefer = TranscriptBriefer(endpoint: endpoint, cache: library.analysisCache)
+            for (asset, _) in all {
+                guard let transcript = analysis[asset.id]?.transcript, !transcript.words.isEmpty else { continue }
+                activity = Activity(title: "Briefing", detail: "\(asset.name) with \(endpoint.model)")
+                // The brief is optional: a slow or confused model must not cost the user their draft.
+                analysis[asset.id]?.brief = try? await briefer.brief(transcript, key: asset.key, context: asset.name)
+            }
+        }
 
         activity = Activity(title: "Drafting", detail: request.template.name)
         let musicPool = music.filter { FileManager.default.fileExists(atPath: $0.url.path) }
-        let name = request.title.isEmpty ? (primary.first?.name ?? "Untitled") : request.title
+        let title = request.title.isEmpty ? primary.first.flatMap { analysis[$0.id]?.brief?.title } : request.title
+        let name = title ?? primary.first?.name ?? "Untitled"
         let clips = all.map { asset, slot in
             ClipInput(asset: asset, analysis: analysis[asset.id] ?? AssetAnalysis(), slot: slot,
                       inPoint: request.trims[asset.id]?.lowerBound, outPoint: request.trims[asset.id]?.upperBound)
         }
         let input = DraftInput(template: request.template, clips: clips,
                                music: request.music ? musicPool : [],
-                               settings: DraftSettings(title: request.title.isEmpty ? nil : request.title, seed: request.seed,
+                               settings: DraftSettings(title: title, seed: request.seed,
                                                        captions: request.captions, music: request.music,
                                                        maxDuration: request.maxDuration, musicID: request.musicID, name: name))
         let result = DraftPipeline.run(input)
@@ -236,7 +246,15 @@ final class AppModel {
     }
 
     private func draftKinds(_ template: Template) -> Set<AnalysisKind> {
-        DraftPipeline.analysisKinds(for: template).filter { $0 != .faces || settings.automation.faceTracking }
+        var kinds = DraftPipeline.analysisKinds(for: template).filter { $0 != .faces || settings.automation.faceTracking }
+        if kinds.contains(.transcript) { kinds.insert(.keywords) }
+        return kinds
+    }
+
+    /// The local LLM from Settings, when the user turned it on.
+    private var llmEndpoint: LLMEndpoint? {
+        guard settings.automation.useLLM, let url = URL(string: settings.automation.llmBaseURL) else { return nil }
+        return LLMEndpoint(baseURL: url, model: settings.automation.llmModel)
     }
 
     // MARK: Highlights (long recordings → many shorts)
@@ -256,8 +274,8 @@ final class AppModel {
             let options = HighlightOptions(count: count)
             var picks = HighlightFinder.find(analysis, duration: asset.info.duration.seconds, options: options)
             var rankedBy = "Ranked by signals (no AI)"
-            if settings.automation.useLLM, let url = URL(string: settings.automation.llmBaseURL) {
-                let ranker = LocalLLMRanker(endpoint: LLMEndpoint(baseURL: url, model: settings.automation.llmModel))
+            if let endpoint = llmEndpoint {
+                let ranker = LocalLLMRanker(endpoint: endpoint)
                 if await ranker.isAvailable() {
                     activity?.detail = "Ranking with \(settings.automation.llmModel)…"
                     let pool = HighlightFinder.select(HighlightFinder.candidates(analysis, duration: asset.info.duration.seconds, options: options), count: count * 3)

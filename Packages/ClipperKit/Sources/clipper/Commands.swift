@@ -14,6 +14,7 @@ struct Draft: AsyncParsableCommand {
           clipper draft --template talking-head --title "3 tips" take1.mov take2.mov --export
           clipper draft --template gameplay match.mov --slot facecam=cam.mov --export
           clipper draft --template montage trip/*.mov --title "Lisbon"
+          clipper draft -t talking-head take.mov --llm ollama --model qwen3:14b --brief   # title from a local LLM
         """)
 
     @OptionGroup var lib: LibraryOptions
@@ -35,6 +36,12 @@ struct Draft: AsyncParsableCommand {
     @Option(help: "Export preset id (default: template's preset).") var preset: String?
     @Option(name: .shortAndLong, help: "Output file for --export.") var output: String?
     @Flag(help: "Print the timeline JSON.") var json = false
+    @OptionGroup(title: "Local LLM brief (title, hook, chapters, hashtags)") var llm: LLMOptions
+    @Flag(help: "Print each clip's brief (needs --llm).") var brief = false
+
+    func validate() throws {
+        if brief, llm.llm == nil { throw ValidationError("--brief needs --llm") }
+    }
 
     func run() async throws {
         let s = try Services(lib)
@@ -51,14 +58,19 @@ struct Draft: AsyncParsableCommand {
             clips += try await s.importFiles([parts[1]], copy: copy).map { ($0, parts[0]) }
         }
 
-        let kinds = DraftPipeline.analysisKinds(for: template)
-        let analysis = kinds.isEmpty ? [:] : try await s.analyze(clips.map(\.0), kinds: kinds)
+        let endpoint = try llm.endpoint()
+        var kinds = DraftPipeline.analysisKinds(for: template)
+        if endpoint != nil { kinds.insert(.transcript) }
+        var analysis = kinds.isEmpty ? [:] : try await s.analyze(clips.map(\.0), kinds: kinds)
+        if let endpoint { await s.addBriefs(to: &analysis, assets: clips.map(\.0), endpoint: endpoint, print: brief) }
+        let draftTitle = title ?? primary.first.flatMap { analysis[$0.id]?.brief?.title }
+        if title == nil, let draftTitle { Console.line("Title from \(endpoint?.model ?? "LLM"): “\(draftTitle)”") }
         let pool = try s.musicPool()
-        let projectName = name ?? title ?? primary.first?.name ?? "Untitled"
+        let projectName = name ?? draftTitle ?? primary.first?.name ?? "Untitled"
         let input = DraftInput(template: template,
                                clips: clips.map { ClipInput(asset: $0.0, analysis: analysis[$0.0.id] ?? AssetAnalysis(), slot: $0.1) },
                                music: pool,
-                               settings: DraftSettings(title: title, seed: seed, captions: noCaptions ? false : nil, music: noMusic ? false : nil,
+                               settings: DraftSettings(title: draftTitle, seed: seed, captions: noCaptions ? false : nil, music: noMusic ? false : nil,
                                                        maxDuration: max, musicID: music, name: projectName))
         let result = DraftPipeline.run(input)
 
@@ -102,7 +114,7 @@ struct Analyze: AsyncParsableCommand {
     static let configuration = CommandConfiguration(abstract: "Analyze library media (results are cached by content).")
     @OptionGroup var lib: LibraryOptions
     @Argument(help: "Asset names or id prefixes (default: all).") var assets: [String] = []
-    @Option(help: "Comma-separated: speech,transcript,loudness,faces,beats,events,visual") var kinds = "speech,transcript,faces"
+    @Option(help: "Comma-separated: speech,transcript,loudness,faces,beats,events,visual,keywords") var kinds = "speech,transcript,faces,keywords"
     @Flag(help: "Print transcripts.") var transcript = false
 
     func run() async throws {
