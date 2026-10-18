@@ -105,16 +105,16 @@ extension Visual {
     /// Writes the curve into the items' `transform.zoom`, on top of each item's own constant zoom. `cuts` are the
     /// timeline times where the footage jumps, which are not every item start: a fast pause plays straight on.
     /// Items whose zoom is already keyframed are left alone.
-    static func zooms(_ items: [Item], words: [TimedWord], cuts: [Double], rule: PunchInRule) -> (items: [Item], note: String?) {
-        guard let last = items.last else { return (items, nil) }
+    static func zooms(_ items: [Item], words: [TimedWord], cuts: [Double], rule: PunchInRule) -> (items: [Item], note: String?, curve: ZoomCurve) {
+        guard let last = items.last else { return (items, nil, ZoomCurve(moves: [])) }
         let curve = zoomCurve(words: words, cuts: cuts, end: last.end.seconds, rule: rule)
         var out = items
         for i in out.indices where !out[i].transform.zoom.isAnimated {
             out[i].transform.zoom = curve.zoom(over: out[i].range, base: out[i].transform.zoom.value(at: .zero))
         }
         let emphasis = curve.moves.filter { $0.reason == .emphasis }.count
-        guard !curve.moves.isEmpty else { return (out, nil) }
+        guard !curve.moves.isEmpty else { return (out, nil, curve) }
         let n = curve.moves.count
-        return (out, "Added \(n) zoom\(n == 1 ? "" : "s") (\(emphasis) on emphasis, \(n - emphasis) for pacing)")
+        return (out, "Added \(n) zoom\(n == 1 ? "" : "s") (\(emphasis) on emphasis, \(n - emphasis) for pacing)", curve)
     }
 }

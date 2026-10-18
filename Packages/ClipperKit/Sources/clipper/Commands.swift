@@ -92,10 +92,12 @@ struct Draft: AsyncParsableCommand {
                                clips: clips.map { ClipInput(asset: $0.0, analysis: analysis[$0.0.id] ?? AssetAnalysis(), slot: $0.1) },
                                music: pool,
                                settings: DraftSettings(title: draftTitle, seed: seed, captions: noCaptions ? false : nil, music: noMusic ? false : nil,
-                                                       maxDuration: max, musicID: music, name: projectName))
+                                                       maxDuration: max, musicID: music, name: projectName),
+                               sfx: try SoundEffects.ensure(in: s.library.soundEffectsURL))
         let result = DraftPipeline.run(input)
 
-        // The chosen music becomes a referenced library asset so the project can be reopened and re-exported.
+        // The chosen music and the sound effects become referenced library assets so the project can be reopened and
+        // re-exported.
         for asset in result.addedAssets {
             _ = try await s.library.importMedia([asset.url], mode: .reference) { _ in asset }
         }

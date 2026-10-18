@@ -239,7 +239,8 @@ final class AppModel {
                                music: request.music ? musicPool : [],
                                settings: DraftSettings(title: title, seed: request.seed,
                                                        captions: request.captions, music: request.music,
-                                                       maxDuration: request.maxDuration, musicID: request.musicID, name: name))
+                                                       maxDuration: request.maxDuration, musicID: request.musicID, name: name),
+                               sfx: Self.soundEffects(in: library))
         let result = DraftPipeline.run(input)
         do {
             for asset in result.addedAssets { _ = try await library.importMedia([asset.url], mode: .reference) { _ in asset } }
@@ -249,6 +250,12 @@ final class AppModel {
             return nil
         }
         return result
+    }
+
+    /// The library's sound effects, written on first use. A draft without them is still a draft, so failure only loses
+    /// the effects.
+    private static func soundEffects(in library: Library) -> [SoundEffect: MediaAsset] {
+        (try? SoundEffects.ensure(in: library.soundEffectsURL)) ?? [:]
     }
 
     private func draftKinds(_ template: Template, slot: String? = nil) -> Set<AnalysisKind> {
@@ -318,7 +325,8 @@ final class AppModel {
                 let result = DraftPipeline.run(DraftInput(template: template,
                                                           clips: [ClipInput(asset: session.asset, analysis: analysis, inPoint: h.start, outPoint: h.end)],
                                                           music: settings.automation.music ? pool : [],
-                                                          settings: DraftSettings(title: h.title, seed: UInt64(i + 1), name: name)))
+                                                          settings: DraftSettings(title: h.title, seed: UInt64(i + 1), name: name),
+                                                          sfx: Self.soundEffects(in: library)))
                 for a in result.addedAssets { _ = try await library.importMedia([a.url], mode: .reference) { _ in a } }
                 timelines.append(result.timeline)
             }

@@ -149,9 +149,11 @@ public enum DraftPipeline {
             cursor = end
         }
         // A quick flash after the cold open marks it as a deliberate jump, not a glitch in the edit.
+        var hookCut: Double?
         if let open = coldOpen, open.count < segments.count,
            let i = primaryItems.firstIndex(where: { segmentOf[$0.id] == segments[open.count] }) {
             primaryItems[i].transition = Transition(.dipToWhite, duration: RationalTime.frames(0.15, rate))
+            hookCut = primaryItems[i].start.seconds
         }
         let chapters = Speech.chapterMarkers(plans, clips: input.clips, items: primaryItems, rate: rate)
         if let rule = rules.transitions {
@@ -238,7 +240,8 @@ public enum DraftPipeline {
             timeline.tracks.append(Track(id: ids.uuid(), kind: kind, name: slot.name, items: items))
         }
 
-        // 3. The primary-track visual passes.
+        // 3. Spoken words on the timeline (zooms, captions, ducking), then the primary-track visual passes.
+        var emphasisZooms: [Double] = []
         if let pti = primaryTrackIndex {
             var items = timeline.tracks[pti].items
             if primary.reframe != .none {
@@ -247,6 +250,7 @@ public enum DraftPipeline {
             if let rule = rules.punchIn {
                 let z = Visual.zooms(items, words: spoken, cuts: cuts, rule: rule)
                 items = z.items
+                emphasisZooms = z.curve.moves.filter { $0.reason == .emphasis }.map(\.start)
                 if let note = z.note { report.notes.append(note) }
             }
             timeline.tracks[pti].items = items
@@ -336,7 +340,19 @@ public enum DraftPipeline {
             }
         }
 
-        // 8. Colour: after every pass that places footage.
+        // 8. Sound effects on the emphasis moments.
+        if let rule = rules.sfx, !input.sfx.isEmpty {
+            let items = Visual.sfxItems(zooms: emphasisZooms, callouts: callouts.map(\.start), hook: hookCut, rule: rule,
+                                        assets: input.sfx, duration: duration.seconds, rate: rate, ids: &ids)
+            if !items.isEmpty {
+                timeline.tracks.append(Track(id: ids.uuid(), kind: .audio, name: "SFX", items: items))
+                let used = Set(items.compactMap(\.content.mediaRef?.asset))
+                added += SoundEffect.allCases.compactMap { input.sfx[$0] }.filter { used.contains($0.id) }
+                report.notes.append("Added \(items.count) sound effect\(items.count == 1 ? "" : "s")")
+            }
+        }
+
+        // 9. Colour: after every pass that places footage.
         if let rule = rules.color {
             let c = Visual.colour(timeline.tracks, clips: input.clips, rule: rule)
             timeline.tracks = c.tracks

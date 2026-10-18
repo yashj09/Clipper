@@ -292,6 +292,37 @@ public struct TransitionRule: Codable, Sendable, Equatable {
     }
 }
 
+/// Sound effects on the draft's emphasis moments, on an "SFX" audio track. Each moment is off when nil.
+public struct SFXRule: Codable, Sendable, Equatable {
+    /// At each emphasis zoom (not pacing moves).
+    public var onZoom: SoundEffect?
+    public var onCallout: SoundEffect?
+    /// Where the cold open cuts to the top of the draft.
+    public var onHook: SoundEffect?
+    /// dB, on files peaking at −6 dBFS. In the e2e clip a whoosh at −20 sat 27 dB under the word it lands on, too quiet
+    /// to notice; at −10 it sits 13 to 17 dB under.
+    public var gain: Double
+    public init(onZoom: SoundEffect? = .whoosh, onCallout: SoundEffect? = .pop, onHook: SoundEffect? = .ding, gain: Double = -10) {
+        self.onZoom = onZoom; self.onCallout = onCallout; self.onHook = onHook; self.gain = gain
+    }
+
+    enum CodingKeys: String, CodingKey { case onZoom, onCallout, onHook, gain }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        func effect(_ key: CodingKeys, _ fallback: SoundEffect) throws -> SoundEffect? {
+            c.contains(key) ? try c.decodeIfPresent(SoundEffect.self, forKey: key) : fallback
+        }
+        onZoom = try effect(.onZoom, .whoosh); onCallout = try effect(.onCallout, .pop); onHook = try effect(.onHook, .ding)
+        gain = try c.decodeIfPresent(Double.self, forKey: .gain) ?? -10
+    }
+    /// Writes the moments even when nil, so "off" does not read back as the default.
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(onZoom, forKey: .onZoom); try c.encode(onCallout, forKey: .onCallout); try c.encode(onHook, forKey: .onHook)
+        try c.encode(gain, forKey: .gain)
+    }
+}
+
 public struct Rules: Codable, Sendable, Equatable {
     public var maxDuration: Double?
     /// Speech clean-up decided from the transcript before the silence cut; nil leaves the speech as recorded.
@@ -312,16 +343,17 @@ public struct Rules: Codable, Sendable, Equatable {
     public var broll: BRollRule?
     public var color: ColorRule?
     public var transitions: TransitionRule?
+    public var sfx: SFXRule?
 
     public init(maxDuration: Double? = nil, speechEdits: SpeechEditRule? = nil, silenceCut: SilenceCutRule? = nil, beatCut: BeatCutRule? = nil,
                 beatSnap: BeatSnapRule? = nil, punchIn: PunchInRule? = nil, captions: CaptionRule? = nil, duck: DuckRule? = nil, loudnessTarget: Double? = -14,
                 maxSilentClip: Double? = nil, hook: HookRule? = nil, callouts: CalloutRule? = nil, broll: BRollRule? = nil,
-                color: ColorRule? = nil, transitions: TransitionRule? = nil) {
+                color: ColorRule? = nil, transitions: TransitionRule? = nil, sfx: SFXRule? = nil) {
         self.maxDuration = maxDuration; self.speechEdits = speechEdits; self.silenceCut = silenceCut; self.beatCut = beatCut; self.beatSnap = beatSnap
         self.punchIn = punchIn
         self.captions = captions; self.duck = duck; self.loudnessTarget = loudnessTarget; self.maxSilentClip = maxSilentClip
         self.hook = hook; self.callouts = callouts; self.broll = broll
-        self.color = color; self.transitions = transitions
+        self.color = color; self.transitions = transitions; self.sfx = sfx
     }
 }
 

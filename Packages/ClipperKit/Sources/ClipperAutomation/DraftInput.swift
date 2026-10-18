@@ -48,9 +48,12 @@ public struct DraftInput: Sendable {
     /// Candidate music (user library + bundled), with analysis where available.
     public var music: [MusicTrack]
     public var settings: DraftSettings
+    /// Sound effect files (`SoundEffects.ensure`); a template's `sfx` rule places nothing without them.
+    public var sfx: [SoundEffect: MediaAsset]
 
-    public init(template: Template, clips: [ClipInput], music: [MusicTrack] = [], settings: DraftSettings = DraftSettings()) {
-        self.template = template; self.clips = clips; self.music = music; self.settings = settings
+    public init(template: Template, clips: [ClipInput], music: [MusicTrack] = [], settings: DraftSettings = DraftSettings(),
+                sfx: [SoundEffect: MediaAsset] = [:]) {
+        self.template = template; self.clips = clips; self.music = music; self.settings = settings; self.sfx = sfx
     }
 }
 
@@ -84,7 +87,8 @@ public struct DraftReport: Sendable, Equatable {
 public struct DraftResult: Sendable {
     public var timeline: Timeline
     public var report: DraftReport
-    /// Assets the timeline references that weren't inputs (the chosen music); register them before rendering.
+    /// Assets the timeline references that weren't inputs (the chosen music, the sound effects placed); register them
+    /// before rendering.
     public var addedAssets: [MediaAsset]
 }
 

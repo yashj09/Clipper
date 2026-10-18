@@ -47,6 +47,8 @@ public final class Library: Sendable {
     public var cacheURL: URL { url.appending(path: "Cache", directoryHint: .isDirectory) }
     public var templatesURL: URL { url.appending(path: "Templates", directoryHint: .isDirectory) }
     public var exportsURL: URL { url.appending(path: "Exports", directoryHint: .isDirectory) }
+    /// Synthesised sound effects for drafts (`SoundEffects.ensure` in ClipperEngine).
+    public var soundEffectsURL: URL { url.appending(path: "SFX", directoryHint: .isDirectory) }
 
     /// Folder for generated proxies of one asset.
     public func proxiesURL(for key: AssetKey) throws -> URL {

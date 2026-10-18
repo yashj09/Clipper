@@ -67,13 +67,15 @@ struct Highlights: AsyncParsableCommand {
         guard draft || export, !picks.isEmpty else { return }
 
         let pool = try s.musicPool()
+        let sfx = try SoundEffects.ensure(in: s.library.soundEffectsURL)
         var timelines: [Timeline] = []
         for (i, h) in picks.enumerated() {
             let name = "\(i + 1). " + (h.title ?? String(h.text.split(separator: " ").prefix(6).joined(separator: " ")))
             let input = DraftInput(template: template,
                                    clips: [ClipInput(asset: asset, analysis: analysis, inPoint: h.start, outPoint: h.end)],
                                    music: pool,
-                                   settings: DraftSettings(title: h.title, seed: UInt64(i + 1), music: noMusic ? false : nil, name: name))
+                                   settings: DraftSettings(title: h.title, seed: UInt64(i + 1), music: noMusic ? false : nil, name: name),
+                                   sfx: sfx)
             let result = DraftPipeline.run(input)
             for added in result.addedAssets { _ = try await s.library.importMedia([added.url], mode: .reference) { _ in added } }
             timelines.append(result.timeline)

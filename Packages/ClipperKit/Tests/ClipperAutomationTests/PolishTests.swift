@@ -100,3 +100,61 @@ func montageInput(clips: Int = 3, seconds: Double = 12) -> DraftInput {
         #expect(out.map { $0.transition != nil } == [false, false, false, true, false])
     }
 }
+
+func sfxAssets() -> [SoundEffect: MediaAsset] {
+    let lengths: [SoundEffect: Double] = [.whoosh: 0.35, .pop: 0.07, .click: 0.012, .ding: 0.6]
+    return Dictionary(uniqueKeysWithValues: SoundEffect.allCases.map { e in
+        var g = IDGenerator(seed: stableHash("sfx-test|\(e.rawValue)"))
+        return (e, MediaAsset(id: g.uuid(), key: AssetKey("sfx-\(e.rawValue)"), name: e.rawValue, url: URL(fileURLWithPath: "/tmp/\(e.rawValue).wav"),
+                              info: MediaInfo(kind: .audio, duration: RationalTime(seconds: lengths[e]!), audioChannels: 1, audioSampleRate: 48_000),
+                              tags: ["sfx"]))
+    })
+}
+
+@Suite struct SoundEffectTests {
+    @Test func earlierMomentsWinAndTheOpeningStaysQuiet() {
+        var ids = IDGenerator(seed: 1)
+        let items = Visual.sfxItems(zooms: [0.1, 1.0, 1.2, 3.0], callouts: [3.1], hook: 1.0, rule: SFXRule(), assets: sfxAssets(),
+                                    duration: 10, rate: .fps30, ids: &ids)
+        let assets = sfxAssets()
+        #expect(items.map(\.start.seconds) == [1.0, 3.0])
+        #expect(items.map(\.content.mediaRef!.asset) == [assets[.ding]!.id, assets[.whoosh]!.id])
+        #expect(items.allSatisfy { $0.gain == .constant(SFXRule().gain) && $0.origin == .auto(pass: "sfx") })
+        let whoosh = items[1].content.mediaRef!.source
+        #expect(whoosh.start == .zero && whoosh.duration <= RationalTime(seconds: 0.35) && whoosh.duration.seconds > 0.3)
+        let short = Visual.sfxItems(zooms: [9.8], callouts: [], hook: nil, rule: SFXRule(), assets: assets, duration: 10, rate: .fps30, ids: &ids)
+        #expect(short.count == 1 && short[0].end.seconds <= 10)
+    }
+
+    @Test func talkingHeadPutsAWhooshOnEachEmphasisZoom() throws {
+        var input = talkingInput()
+        input.sfx = sfxAssets()
+        let result = DraftPipeline.run(input)
+        let track = try #require(result.timeline.tracks.first { $0.name == "SFX" })
+        #expect(track.kind == .audio)
+        #expect(!track.items.isEmpty)
+        let starts = track.items.map(\.start.seconds)
+        #expect(starts.allSatisfy { $0 >= 0.3 })
+        #expect(!zip(starts, starts.dropFirst()).contains { $1 - $0 < 0.4 })
+        #expect(result.addedAssets.contains { $0.id == input.sfx[.whoosh]!.id })
+        #expect(!result.addedAssets.contains { $0.id == input.sfx[.click]!.id })
+        #expect(result.report.notes.contains("Added \(track.items.count) sound effect\(track.items.count == 1 ? "" : "s")"))
+        #expect(result.report.warnings.isEmpty)
+        // Each whoosh starts a zoom: the framing just before differs from the framing a ramp later.
+        let primary = result.timeline.tracks[0].items
+        func zoom(at t: Double) -> Double {
+            let item = primary.last { $0.start.seconds <= t }!
+            return item.transform.zoom.value(at: RationalTime(seconds: t - item.start.seconds))
+        }
+        for item in track.items {
+            #expect(item.content.mediaRef?.asset == input.sfx[.whoosh]!.id)
+            let t = item.start.seconds
+            #expect(abs(zoom(at: t - 0.02) - zoom(at: t + 0.3)) > 0.05, "zoom at \(t)")
+        }
+
+        let plain = DraftPipeline.run(talkingInput())
+        #expect(!plain.timeline.tracks.contains { $0.name == "SFX" })
+        input.template.rules.sfx = nil
+        #expect(DraftPipeline.run(input).timeline == plain.timeline)
+    }
+}
