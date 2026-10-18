@@ -3,10 +3,6 @@ import ClipperEngine
 import CryptoKit
 import Foundation
 
-public enum AnalysisKind: String, Sendable, CaseIterable, Codable {
-    case speech, transcript, loudness, faces, beats, events, visual
-}
-
 public struct AnalysisOptions: Sendable {
     public var locale: Locale
     public var transcriber: any Transcriber

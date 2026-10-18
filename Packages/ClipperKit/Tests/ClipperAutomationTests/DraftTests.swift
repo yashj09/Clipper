@@ -111,6 +111,13 @@ func talkingInput(seed: UInt64 = 7, title: String? = "Local editing in 60s") -> 
         #expect(tl.tracks.last?.kind == .music && tl.tracks.firstIndex { $0.kind == .caption }! > tl.tracks.firstIndex { $0.kind == .video }!)
     }
 
+    @Test func analysisKindsCoverWhatEachBuiltInReads() {
+        #expect(DraftPipeline.analysisKinds(for: BuiltIns.talkingHead) == [.speech, .transcript, .faces])
+        #expect(DraftPipeline.analysisKinds(for: BuiltIns.gameplay) == [.speech, .transcript, .faces, .visual])
+        #expect(DraftPipeline.analysisKinds(for: BuiltIns.montage) == [.visual])
+        #expect(DraftPipeline.analysisKinds(for: BuiltIns.vlog) == [.speech, .transcript, .faces])
+    }
+
     @Test func draftsAreDeterministic() throws {
         let a = try json(DraftPipeline.run(talkingInput(seed: 7)).timeline)
         let b = try json(DraftPipeline.run(talkingInput(seed: 7)).timeline)

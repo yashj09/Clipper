@@ -64,14 +64,6 @@ struct Services {
         return result
     }
 
-    /// Which analyses a template's rules depend on.
-    static func kinds(for template: Template) -> Set<AnalysisKind> {
-        var k: Set<AnalysisKind> = []
-        if template.rules.silenceCut != nil || template.rules.captions != nil || template.rules.duck != nil { k.formUnion([.speech, .transcript]) }
-        if template.slots.contains(where: { $0.reframe == .face }) { k.insert(.faces) }
-        return k
-    }
-
     func templates() throws -> [Template] { BuiltIns.templates + (try library.userTemplates()) }
 
     func template(_ idOrPath: String) throws -> Template {

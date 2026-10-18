@@ -193,10 +193,7 @@ final class AppModel {
         let all = primary.map { ($0, nil as String?) } + others.map { ($0.0, Optional($0.1)) }
         guard !primary.isEmpty else { alert = "Add at least one clip to the \(request.template.primarySlot?.name ?? "main") slot."; return nil }
 
-        var kinds: Set<AnalysisKind> = []
-        let rules = request.template.rules
-        if rules.silenceCut != nil || rules.captions != nil || rules.duck != nil { kinds.formUnion([.speech, .transcript]) }
-        if settings.automation.faceTracking, request.template.slots.contains(where: { $0.reframe == .face }) { kinds.insert(.faces) }
+        let kinds = draftKinds(request.template)
         let pipeline = AnalysisPipeline(cache: library.analysisCache,
                                         options: AnalysisOptions(locale: Locale(identifier: settings.automation.transcriptionLocale)))
         var analysis: [AssetID: AssetAnalysis] = [:]
@@ -238,7 +235,14 @@ final class AppModel {
         return result
     }
 
+    private func draftKinds(_ template: Template) -> Set<AnalysisKind> {
+        DraftPipeline.analysisKinds(for: template).filter { $0 != .faces || settings.automation.faceTracking }
+    }
+
     // MARK: Highlights (long recordings → many shorts)
+
+    /// The pipeline skips speech and transcript for recordings without audio.
+    private static let highlightKinds: Set<AnalysisKind> = [.events, .visual, .speech, .transcript]
 
     func findHighlights(_ asset: MediaAsset, count: Int = 12) async {
         guard let library else { return }
@@ -246,9 +250,7 @@ final class AppModel {
                                         options: AnalysisOptions(locale: Locale(identifier: settings.automation.transcriptionLocale)))
         activity = Activity(title: "Finding highlights", detail: asset.name, progress: 0)
         do {
-            var kinds: Set<AnalysisKind> = [.events, .visual]
-            if asset.info.hasAudio { kinds.formUnion([.speech, .transcript]) }
-            let analysis = try await pipeline.analyze(asset, kinds: kinds) { kind, fraction in
+            let analysis = try await pipeline.analyze(asset, kinds: Self.highlightKinds) { kind, fraction in
                 Task { @MainActor in self.activity?.detail = "\(asset.name) — \(kind.rawValue) \(Int(fraction * 100))%" }
             }
             let options = HighlightOptions(count: count)
@@ -280,10 +282,17 @@ final class AppModel {
         let pool = music.filter { FileManager.default.fileExists(atPath: $0.url.path) }
         var timelines: [Timeline] = []
         do {
+            // The highlight search ran before a template was chosen, so it has no faces for face reframing. Everything
+            // it did analyse comes back from the cache.
+            let pipeline = AnalysisPipeline(cache: library.analysisCache,
+                                            options: AnalysisOptions(locale: Locale(identifier: settings.automation.transcriptionLocale)))
+            let analysis = try await pipeline.analyze(session.asset, kinds: Self.highlightKinds.union(draftKinds(template))) { kind, fraction in
+                Task { @MainActor in self.activity?.detail = "\(session.asset.name) — \(kind.rawValue) \(Int(fraction * 100))%" }
+            }
             for (i, h) in highlights.enumerated() {
                 let name = "\(i + 1). " + (h.title ?? h.text.split(separator: " ").prefix(6).joined(separator: " "))
                 let result = DraftPipeline.run(DraftInput(template: template,
-                                                          clips: [ClipInput(asset: session.asset, analysis: session.analysis, inPoint: h.start, outPoint: h.end)],
+                                                          clips: [ClipInput(asset: session.asset, analysis: analysis, inPoint: h.start, outPoint: h.end)],
                                                           music: settings.automation.music ? pool : [],
                                                           settings: DraftSettings(title: h.title, seed: UInt64(i + 1), name: name)))
                 for a in result.addedAssets { _ = try await library.importMedia([a.url], mode: .reference) { _ in a } }

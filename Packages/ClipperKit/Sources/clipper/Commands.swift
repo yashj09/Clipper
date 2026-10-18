@@ -51,7 +51,7 @@ struct Draft: AsyncParsableCommand {
             clips += try await s.importFiles([parts[1]], copy: copy).map { ($0, parts[0]) }
         }
 
-        let kinds = Services.kinds(for: template)
+        let kinds = DraftPipeline.analysisKinds(for: template)
         let analysis = kinds.isEmpty ? [:] : try await s.analyze(clips.map(\.0), kinds: kinds)
         let pool = try s.musicPool()
         let projectName = name ?? title ?? primary.first?.name ?? "Untitled"

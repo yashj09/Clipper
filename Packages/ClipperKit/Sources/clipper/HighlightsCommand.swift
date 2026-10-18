@@ -39,7 +39,7 @@ struct Highlights: AsyncParsableCommand {
         Console.line(String(format: "Recording: %@ (%.0f min)", asset.name, asset.info.duration.seconds / 60))
 
         var kinds: Set<AnalysisKind> = [.speech, .transcript, .events, .visual]
-        kinds.formUnion(Services.kinds(for: template))
+        kinds.formUnion(DraftPipeline.analysisKinds(for: template))
         let analysis = try await s.analyze([asset], kinds: kinds)[asset.id] ?? AssetAnalysis()
         let options = HighlightOptions(minDuration: min, maxDuration: max, targetDuration: target, count: top)
         var picks = HighlightFinder.find(analysis, duration: asset.info.duration.seconds, options: options)

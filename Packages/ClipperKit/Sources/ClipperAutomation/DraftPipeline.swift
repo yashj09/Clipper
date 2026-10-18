@@ -262,6 +262,16 @@ public enum DraftPipeline {
         return DraftResult(timeline: timeline, report: report, addedAssets: added)
     }
 
+    /// The analyses a template's rules and slots read. The CLI and the app both request exactly these.
+    public static func analysisKinds(for template: Template) -> Set<AnalysisKind> {
+        var kinds: Set<AnalysisKind> = []
+        let rules = template.rules
+        if rules.silenceCut != nil || rules.captions != nil || rules.duck != nil { kinds.formUnion([.speech, .transcript]) }
+        if template.slots.contains(where: { $0.reframe == .face }) { kinds.insert(.faces) }
+        if template.slots.contains(where: { $0.reframe == .saliency }) { kinds.insert(.visual) }
+        return kinds
+    }
+
     // MARK: Helpers
 
     /// Maps an index into `primaryClips` back to an index into `input.clips`.

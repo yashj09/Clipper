@@ -3,6 +3,10 @@ import Foundation
 // Analysis artifacts live in Core so Automation can consume them without importing the analyzers.
 // Times are in seconds of *source* media: analysis is per asset, independent of any timeline.
 
+public enum AnalysisKind: String, Sendable, CaseIterable, Codable {
+    case speech, transcript, loudness, faces, beats, events, visual
+}
+
 public struct TranscriptWord: Codable, Sendable, Equatable {
     public var text: String
     public var start: Double
