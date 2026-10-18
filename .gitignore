@@ -26,3 +26,4 @@ Spikes/out/
 # Generated Xcode project and build products
 App/Clipper.xcodeproj/
 App/build/
+.audit/
