@@ -3,7 +3,7 @@ import Foundation
 
 /// What a word contributes to emphasis. Decided once per word in `SpeechPlan`; captions and zooms read two views.
 struct Cue: OptionSet, Sendable, Hashable {
-    let rawValue: UInt8
+    let rawValue: UInt16
     /// Has a digit, or is a number word ("three", "million").
     static let number = Cue(rawValue: 1 << 0)
     static let exclaim = Cue(rawValue: 1 << 1)
@@ -19,11 +19,13 @@ struct Cue: OptionSet, Sendable, Hashable {
     static let marked = Cue(rawValue: 1 << 6)
     /// A name, place, organization or number, or a noun with an emoji, from the keyword tags.
     static let keyword = Cue(rawValue: 1 << 7)
+    /// Profanity, marked only under a `ProfanityRule`. Never emphasised: the word is silenced and masked.
+    static let profane = Cue(rawValue: 1 << 8)
 
     /// Caption highlight: word-level salience only. A highlighted "So" at every sentence start would be noise.
-    var highlights: Bool { !isDisjoint(with: [.number, .exclaim, .caps, .loud, .marked, .keyword]) }
+    var highlights: Bool { !contains(.profane) && !isDisjoint(with: [.number, .exclaim, .caps, .loud, .marked, .keyword]) }
     /// Zoom candidate: any cue but `keyword`. Keywords get callouts; zooming on each as well would be too busy.
-    var zooms: Bool { !subtracting(.keyword).isEmpty }
+    var zooms: Bool { !contains(.profane) && !subtracting(.keyword).isEmpty }
 }
 
 /// A transcript word with its cue. Reads like a `TranscriptWord` (`w.start`, `w.isFiller`).

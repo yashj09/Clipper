@@ -345,6 +345,20 @@ public struct BadShotRule: Codable, Sendable, Equatable {
     }
 }
 
+/// Profanity in the transcript is silenced under the word and masked in the captions ("f***"). Off in every built-in:
+/// it changes what the speaker said.
+public struct ProfanityRule: Codable, Sendable, Equatable {
+    public enum Action: String, Codable, Sendable { case mute, bleep }
+    /// `bleep` plays a tone over the silenced word when the library has the effect, and mutes otherwise.
+    public var action: Action
+    public init(action: Action = .mute) { self.action = action }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        action = try c.decodeIfPresent(Action.self, forKey: .action) ?? .mute
+    }
+}
+
 public struct Rules: Codable, Sendable, Equatable {
     public var maxDuration: Double?
     /// Speech clean-up decided from the transcript before the silence cut; nil leaves the speech as recorded.
@@ -367,16 +381,18 @@ public struct Rules: Codable, Sendable, Equatable {
     public var transitions: TransitionRule?
     public var sfx: SFXRule?
     public var badShots: BadShotRule?
+    public var profanity: ProfanityRule?
 
     public init(maxDuration: Double? = nil, speechEdits: SpeechEditRule? = nil, silenceCut: SilenceCutRule? = nil, beatCut: BeatCutRule? = nil,
                 beatSnap: BeatSnapRule? = nil, punchIn: PunchInRule? = nil, captions: CaptionRule? = nil, duck: DuckRule? = nil, loudnessTarget: Double? = -14,
                 maxSilentClip: Double? = nil, hook: HookRule? = nil, callouts: CalloutRule? = nil, broll: BRollRule? = nil,
-                color: ColorRule? = nil, transitions: TransitionRule? = nil, sfx: SFXRule? = nil, badShots: BadShotRule? = nil) {
+                color: ColorRule? = nil, transitions: TransitionRule? = nil, sfx: SFXRule? = nil, badShots: BadShotRule? = nil, profanity: ProfanityRule? = nil) {
         self.maxDuration = maxDuration; self.speechEdits = speechEdits; self.silenceCut = silenceCut; self.beatCut = beatCut; self.beatSnap = beatSnap
         self.punchIn = punchIn
         self.captions = captions; self.duck = duck; self.loudnessTarget = loudnessTarget; self.maxSilentClip = maxSilentClip
         self.hook = hook; self.callouts = callouts; self.broll = broll
         self.color = color; self.transitions = transitions; self.sfx = sfx; self.badShots = badShots
+        self.profanity = profanity
     }
 }
 

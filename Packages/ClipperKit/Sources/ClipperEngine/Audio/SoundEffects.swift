@@ -95,6 +95,10 @@ public enum SoundEffects {
                 let tone = sin(2 * Double.pi * 1320 * t) + 0.2 * sin(2 * Double.pi * 2640 * t)
                 return tone * exp(-t / 0.15) * min(1, t / 0.002) * min(1, Double(n - i) / (0.02 * sr))
             }
+        case .bleep:
+            // 1 kHz with 10 ms ramps.
+            let n = Int(0.25 * sr), ramp = 0.01 * sr
+            x = (0..<n).map { i in sin(2 * Double.pi * 1000 * Double(i) / sr) * min(1, Double(i) / ramp, Double(n - i) / ramp) }
         }
         let peak = x.reduce(0) { max($0, abs($1)) }
         let gain = peak > 0 ? pow(10, -6.0 / 20) / peak : 0

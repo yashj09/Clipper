@@ -5,7 +5,7 @@ import Testing
 @testable import ClipperEngine
 
 @Suite struct SoundEffectsTests {
-    static let lengths: [SoundEffect: Double] = [.whoosh: 0.35, .pop: 0.07, .click: 0.012, .ding: 0.6]
+    static let lengths: [SoundEffect: Double] = [.whoosh: 0.35, .pop: 0.07, .click: 0.012, .ding: 0.6, .bleep: 0.25]
 
     func read(_ url: URL) throws -> (rate: Double, channels: Int, bits: Int, samples: [Float]) {
         let file = try AVAudioFile(forReading: url)
@@ -45,7 +45,7 @@ import Testing
         #expect(again == assets)
         let popDate = try FileManager.default.attributesOfItem(atPath: assets[.pop]!.url.path)[.modificationDate] as? Date
         #expect(popDate == Date(timeIntervalSince1970: 1_000_000))
-        #expect(try FileManager.default.contentsOfDirectory(atPath: dir.path).sorted() == ["click.wav", "ding.wav", "pop.wav", "whoosh.wav"])
+        #expect(try FileManager.default.contentsOfDirectory(atPath: dir.path).sorted() == ["bleep.wav", "click.wav", "ding.wav", "pop.wav", "whoosh.wav"])
 
         // Deterministic: a deleted file comes back byte for byte.
         let original = try Data(contentsOf: assets[.whoosh]!.url)

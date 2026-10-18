@@ -7,7 +7,7 @@ extension Visual {
     static func calloutWords(_ words: [TimedWord], rule: CalloutRule, duration: Double) -> [TimedWord] {
         var picked: [TimedWord] = []
         for w in words.sorted(by: { $0.start < $1.start })
-        where !w.isFiller && w.cue.contains(.keyword) && w.start >= 2.5 && w.start <= duration - 1
+        where !w.isFiller && w.cue.contains(.keyword) && !w.cue.contains(.profane) && w.start >= 2.5 && w.start <= duration - 1
             && w.start - (picked.last?.start ?? -.infinity) >= rule.minSpacing {
             picked.append(w)
         }

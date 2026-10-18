@@ -71,6 +71,7 @@ public enum DraftPipeline {
         } else {
             for (i, clip) in input.clips.enumerated() where (clip.slot ?? primary.id) == primary.id {
                 var plan = SpeechPlan(clip: clip, rule: rules.speechEdits)
+                if rules.profanity != nil { plan.markProfanity(locale: clip.analysis.transcript?.locale ?? "") }
                 for r in badShots(clip, sparing: plan.words) { plan.excluded.insert(contentsOf: r.lowerBound..<r.upperBound) }
                 plans[i] = plan
                 report.removedTakes += plan.removedTakes
@@ -275,12 +276,20 @@ public enum DraftPipeline {
             timeline.tracks[pti].items = items
         }
 
+        var muted: (spans: [(Double, Double)], words: Int) = ([], 0)
+        if rules.profanity != nil, let pti = primaryTrackIndex {
+            let m = Visual.muteProfanity(timeline.tracks[pti].items, words: spoken, base: primary.audioGain)
+            timeline.tracks[pti].items = m.items
+            muted = (m.spans, m.words)
+        }
+
         // 4. Captions. A word with a callout shows its emoji there, not twice.
         let callouts = rules.callouts.map { Visual.calloutWords(spoken, rule: $0, duration: duration.seconds) } ?? []
         let calledOut = Set(callouts.map(\.start))
         let captionWords = spoken.map { w in
             var w = w
             if calledOut.contains(w.start) { w.emoji = nil }
+            if w.cue.contains(.profane) { w.text = Profanity.masked(w.text); w.emoji = nil }
             return w
         }
         let captionsOn = input.settings.captions ?? (rules.captions != nil)
@@ -371,6 +380,18 @@ public enum DraftPipeline {
             }
         }
 
+        if let rule = rules.profanity, muted.words > 0 {
+            let plural = muted.words == 1 ? "" : "s"
+            if rule.action == .bleep, let bleep = input.sfx[.bleep] {
+                let items = Visual.bleeps(muted.spans, asset: bleep, duration: duration.seconds, rate: rate, ids: &ids)
+                timeline.tracks.append(Track(id: ids.uuid(), kind: .audio, name: "Bleeps", items: items))
+                added.append(bleep)
+                report.notes.append("Bleeped \(muted.words) word\(plural)")
+            } else {
+                report.notes.append("Muted \(muted.words) word\(plural)")
+            }
+        }
+
         // 9. Colour: after every pass that places footage.
         if let rule = rules.color {
             let c = Visual.colour(timeline.tracks, clips: input.clips, rule: rule)
@@ -420,7 +441,7 @@ public enum DraftPipeline {
             return framing([s]).union([.transcript, .keywords]).union(rules.color != nil ? [.color] : [])
         }
         var kinds: Set<AnalysisKind> = []
-        if rules.speechEdits != nil || rules.silenceCut != nil || rules.captions != nil || rules.duck != nil {
+        if rules.speechEdits != nil || rules.silenceCut != nil || rules.captions != nil || rules.duck != nil || rules.profanity != nil {
             kinds.formUnion([.speech, .transcript])
         }
         if rules.callouts != nil || rules.captions?.emoji == true || rules.broll != nil { kinds.formUnion([.speech, .transcript, .keywords]) }

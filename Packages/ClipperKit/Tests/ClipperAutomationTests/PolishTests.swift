@@ -102,7 +102,7 @@ func montageInput(clips: Int = 3, seconds: Double = 12) -> DraftInput {
 }
 
 func sfxAssets() -> [SoundEffect: MediaAsset] {
-    let lengths: [SoundEffect: Double] = [.whoosh: 0.35, .pop: 0.07, .click: 0.012, .ding: 0.6]
+    let lengths: [SoundEffect: Double] = [.whoosh: 0.35, .pop: 0.07, .click: 0.012, .ding: 0.6, .bleep: 0.25]
     return Dictionary(uniqueKeysWithValues: SoundEffect.allCases.map { e in
         var g = IDGenerator(seed: stableHash("sfx-test|\(e.rawValue)"))
         return (e, MediaAsset(id: g.uuid(), key: AssetKey("sfx-\(e.rawValue)"), name: e.rawValue, url: URL(fileURLWithPath: "/tmp/\(e.rawValue).wav"),
@@ -222,5 +222,80 @@ func plays(_ t: Timeline, asset: AssetID, _ range: ClosedRange<Double>) -> Bool 
         #expect(plays(result.timeline, asset: input.clips[1].asset.id, 4...12))
         #expect(result.report.warnings.contains("shot1 is mostly blurry or badly exposed: kept all of it"))
         #expect(!result.report.notes.contains { $0.hasPrefix("Skipped") })
+    }
+}
+
+func profaneInput(_ rule: ProfanityRule?) -> DraftInput {
+    var input = talkingInput()
+    var lines = speech
+    lines[1] = "Um so the first thing you need to know is that everything runs fucking locally."
+    input.clips[0].analysis.transcript = transcript(lines, pauses: [0.2, 1.6, 0.9, 2.5])
+    input.template.rules.profanity = rule
+    return input
+}
+
+/// The primary item's gain where `source` (seconds) plays.
+func gain(_ t: Timeline, atSource source: Double) -> Double? {
+    for item in t.tracks[0].items {
+        guard let ref = item.content.mediaRef, ref.source.start.seconds <= source, source < ref.source.end.seconds else { continue }
+        return item.gain.value(at: RationalTime(seconds: source - ref.source.start.seconds))
+    }
+    return nil
+}
+
+func captionText(_ t: Timeline) -> String {
+    t.tracks.filter { $0.kind == .caption }.flatMap(\.items).compactMap { if case .caption(let c) = $0.content { c.text } else { nil } }
+        .joined(separator: " ")
+}
+
+@Suite struct ProfanityTests {
+    @Test func theListMatchesWordsAsTranscribed() {
+        #expect(Profanity.isProfane("Fucking,", locale: "en-US") && Profanity.isProfane("shit!", locale: "en_GB"))
+        #expect(!Profanity.isProfane("class", locale: "en-US") && !Profanity.isProfane("assistant", locale: "en-US"))
+        #expect(!Profanity.isProfane("fucking", locale: "fr-FR"))
+        #expect(Profanity.masked("Fucking,") == "F******," && Profanity.masked("shit") == "s***")
+        #expect(!Cue([.caps, .exclaim, .profane]).highlights && !Cue([.caps, .exclaim, .profane]).zooms)
+    }
+
+    @Test func aProfaneWordIsSilencedAndMasked() throws {
+        let input = profaneInput(ProfanityRule())
+        let word = try #require(input.clips[0].analysis.transcript!.words.first { $0.text == "fucking" })
+        let result = DraftPipeline.run(input)
+        let t = result.timeline
+        #expect(try #require(gain(t, atSource: (word.start + word.end) / 2)) <= -59.9)
+        #expect(try #require(gain(t, atSource: word.start - 0.02)) <= -59.9)
+        #expect(try #require(gain(t, atSource: word.start - 0.1)) == 0)
+        #expect(try #require(gain(t, atSource: word.end + 0.1)) == 0)
+        #expect(captionText(t).contains("f******") && !captionText(t).lowercased().contains("fucking"))
+        #expect(result.report.notes.contains("Muted 1 word"))
+        #expect(!t.tracks.contains { $0.name == "Bleeps" })
+        // Without the effect a bleep falls back to muting.
+        #expect(DraftPipeline.run(profaneInput(ProfanityRule(action: .bleep))).timeline == t)
+    }
+
+    @Test func bleepPlaysOverTheSilencedWord() throws {
+        var input = profaneInput(ProfanityRule(action: .bleep))
+        input.sfx = sfxAssets()
+        input.template.rules.sfx = nil
+        let result = DraftPipeline.run(input)
+        let track = try #require(result.timeline.tracks.first { $0.name == "Bleeps" })
+        #expect(track.kind == .audio && track.items.count == 1)
+        let bleep = track.items[0]
+        #expect(bleep.content.mediaRef?.asset == input.sfx[.bleep]!.id)
+        #expect(result.addedAssets.filter { $0.tags == ["sfx"] }.map(\.id) == [input.sfx[.bleep]!.id])
+        #expect(result.report.notes.contains("Bleeped 1 word"))
+        // It starts where the dip does, within a frame.
+        let primary = result.timeline.tracks[0].items.first { $0.range.contains(bleep.start) }!
+        #expect(primary.gain.value(at: bleep.start - primary.start + RationalTime(value: 1, scale: 30)) <= -59.9)
+    }
+
+    @Test func cleanSpeechOrNoRuleLeavesTheDraftAlone() {
+        var clean = talkingInput()
+        clean.template.rules.profanity = ProfanityRule()
+        #expect(DraftPipeline.run(clean).timeline == DraftPipeline.run(talkingInput()).timeline)
+        let off = DraftPipeline.run(profaneInput(nil))
+        #expect(captionText(off.timeline).lowercased().contains("fucking"))
+        #expect(off.timeline.tracks[0].items.allSatisfy { $0.gain.keys.allSatisfy { $0.value == 0 || $0.value == -40 } })
+        #expect(!off.report.notes.contains { $0.hasPrefix("Muted") })
     }
 }
