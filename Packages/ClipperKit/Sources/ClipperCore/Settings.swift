@@ -44,6 +44,8 @@ public struct ClipperSettings: Codable, Sendable, Equatable {
         /// "apple" (SpeechTranscriber) or "whisper" (whisper.cpp, if installed).
         public var transcriber = "apple"
         public var faceTracking = true
+        /// Drafts whose template cuts away to B-roll use library videos tagged or named "b-roll" when given none.
+        public var autoBRoll = true
         /// Optional local LLM (OpenAI-compatible server on this Mac) for re-ranking highlights. Off by default.
         public var useLLM = false
         public var llmBaseURL = "http://localhost:11434/v1"
@@ -59,6 +61,7 @@ public struct ClipperSettings: Codable, Sendable, Equatable {
             transcriptionLocale = c.value(.transcriptionLocale, d.transcriptionLocale)
             transcriber = c.value(.transcriber, d.transcriber)
             faceTracking = c.value(.faceTracking, d.faceTracking)
+            autoBRoll = c.value(.autoBRoll, d.autoBRoll)
             useLLM = c.value(.useLLM, d.useLLM)
             llmBaseURL = c.value(.llmBaseURL, d.llmBaseURL)
             llmModel = c.value(.llmModel, d.llmModel)

@@ -117,7 +117,7 @@ private struct SlotEditor: View {
                         .padding(.horizontal, 8).padding(.vertical, 4)
                         .background(Capsule().fill(Color.gray.opacity(0.18)))
                     }
-                    if clips.isEmpty { Text("Drop clips here or use “Add clip”").foregroundStyle(.secondary).font(.callout) }
+                    if clips.isEmpty { Text(emptyHint).foregroundStyle(.secondary).font(.callout) }
                 }
             }
             .frame(height: 30)
@@ -127,6 +127,11 @@ private struct SlotEditor: View {
                 return !ids.isEmpty
             }
         }
+    }
+
+    private var emptyHint: String {
+        slot.role == .broll && model.settings.automation.autoBRoll
+            ? "Drop clips here, or leave empty to use clips named or tagged “b-roll”" : "Drop clips here or use “Add clip”"
     }
 }
 
@@ -225,6 +230,7 @@ struct SettingsView: View {
                 Toggle("Captions by default", isOn: $model.settings.automation.captions)
                 Toggle("Music by default", isOn: $model.settings.automation.music)
                 Toggle("Face tracking (reframing)", isOn: $model.settings.automation.faceTracking)
+                Toggle("B-roll from clips named or tagged “b-roll”", isOn: $model.settings.automation.autoBRoll)
                 TextField("Speech language", text: $model.settings.automation.transcriptionLocale)
                 Section("Local LLM (optional, for ranking highlights)") {
                     Toggle("Re-rank highlights with a local model", isOn: $model.settings.automation.useLLM)

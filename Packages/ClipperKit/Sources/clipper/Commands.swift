@@ -13,6 +13,7 @@ struct Draft: AsyncParsableCommand {
         Examples:
           clipper draft --template talking-head --title "3 tips" take1.mov take2.mov --export
           clipper draft --template gameplay match.mov --slot facecam=cam.mov --export
+          clipper draft -t talking-head take.mov --slot broll=desk.mov --slot broll=camera.mov   # cut away where named
           clipper draft --template montage trip/*.mov --title "Lisbon"
           clipper draft -t talking-head take.mov --llm ollama --model qwen3:14b --brief   # title from a local LLM
         """)
@@ -24,6 +25,8 @@ struct Draft: AsyncParsableCommand {
     var files: [String]
     @Option(name: .customLong("slot"), help: "Assign a clip to another slot: <slot>=<file> (repeatable).")
     var slots: [String] = []
+    @Option(name: .customLong("broll-tag"), help: "Offer every library video with this tag as B-roll (repeatable).")
+    var brollTags: [String] = []
     @Option(help: "Title text for the template's title element.") var title: String?
     @Option(help: "Project name (default: title or first clip name).") var name: String?
     @Option(help: "Maximum duration in seconds (overrides the template).") var max: Double?
@@ -57,11 +60,29 @@ struct Draft: AsyncParsableCommand {
             }
             clips += try await s.importFiles([parts[1]], copy: copy).map { ($0, parts[0]) }
         }
+        if !brollTags.isEmpty {
+            guard let slot = template.slots.first(where: { $0.role == .broll }) else {
+                throw ValidationErrorText("--broll-tag needs a template with a B-roll slot; \(template.id) has none")
+            }
+            let wanted = Set(brollTags.map { $0.lowercased() }), given = Set(clips.map(\.0.id))
+            let tagged = try s.library.assets().filter { a in
+                a.info.hasVideo && !given.contains(a.id) && a.tags.contains { wanted.contains($0.lowercased()) }
+            }
+            if tagged.isEmpty { Console.line("No library video is tagged \(brollTags.joined(separator: " or "))") }
+            clips += tagged.map { ($0, slot.id) }
+        }
 
         let endpoint = try llm.endpoint()
-        var kinds = DraftPipeline.analysisKinds(for: template)
-        if endpoint != nil { kinds.insert(.transcript) }
-        var analysis = kinds.isEmpty ? [:] : try await s.analyze(clips.map(\.0), kinds: kinds)
+        var analysis: [AssetID: AssetAnalysis] = [:]
+        var slotOrder: [String?] = []
+        for (_, slot) in clips where !slotOrder.contains(slot) { slotOrder.append(slot) }
+        for slot in slotOrder {
+            var kinds = DraftPipeline.analysisKinds(for: template, slot: slot)
+            if endpoint != nil { kinds.insert(.transcript) }
+            guard !kinds.isEmpty else { continue }
+            let found = try await s.analyze(clips.filter { $0.1 == slot }.map(\.0), kinds: kinds)
+            analysis.merge(found) { first, _ in first }
+        }
         if let endpoint { await s.addBriefs(to: &analysis, assets: clips.map(\.0), endpoint: endpoint, print: brief) }
         let draftTitle = title ?? primary.first.flatMap { analysis[$0.id]?.brief?.title }
         if title == nil, let draftTitle { Console.line("Title from \(endpoint?.model ?? "LLM"): “\(draftTitle)”") }

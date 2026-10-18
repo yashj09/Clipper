@@ -187,18 +187,24 @@ final class AppModel {
     /// registers any music it picked. Leaves `activity` showing "Drafting" on success; nil (with an alert) on failure.
     func makeDraft(_ request: DraftRequest) async -> DraftResult? {
         guard let library else { return nil }
+        var request = request
+        if settings.automation.autoBRoll, request.template.rules.broll != nil,
+           let slot = request.template.slots.first(where: { $0.role == .broll }), (request.slots[slot.id] ?? []).isEmpty {
+            let asked = Set(request.primary + request.slots.values.joined())
+            request.slots[slot.id] = assets.filter { $0.isBRoll && !asked.contains($0.id) }.map(\.id)
+        }
         let byID = allAssets
         let primary = request.primary.compactMap { byID[$0] }
         let others = request.slots.flatMap { slot, ids in ids.compactMap { byID[$0] }.map { ($0, slot) } }
         let all = primary.map { ($0, nil as String?) } + others.map { ($0.0, Optional($0.1)) }
         guard !primary.isEmpty else { alert = "Add at least one clip to the \(request.template.primarySlot?.name ?? "main") slot."; return nil }
 
-        let kinds = draftKinds(request.template)
         let pipeline = AnalysisPipeline(cache: library.analysisCache,
                                         options: AnalysisOptions(locale: Locale(identifier: settings.automation.transcriptionLocale)))
         var analysis: [AssetID: AssetAnalysis] = [:]
         do {
-            for (i, (asset, _)) in all.enumerated() where analysis[asset.id] == nil {
+            for (i, (asset, slot)) in all.enumerated() where analysis[asset.id] == nil {
+                let kinds = draftKinds(request.template, slot: slot)
                 activity = Activity(title: "Analyzing", detail: "\(i + 1)/\(all.count) \(asset.name)", progress: Double(i) / Double(all.count))
                 analysis[asset.id] = try await pipeline.analyze(asset, kinds: kinds.filter { k in
                     (k != .speech && k != .transcript) || asset.info.hasAudio
@@ -245,8 +251,8 @@ final class AppModel {
         return result
     }
 
-    private func draftKinds(_ template: Template) -> Set<AnalysisKind> {
-        var kinds = DraftPipeline.analysisKinds(for: template).filter { $0 != .faces || settings.automation.faceTracking }
+    private func draftKinds(_ template: Template, slot: String? = nil) -> Set<AnalysisKind> {
+        var kinds = DraftPipeline.analysisKinds(for: template, slot: slot).filter { $0 != .faces || settings.automation.faceTracking }
         if kinds.contains(.transcript) { kinds.insert(.keywords) }
         return kinds
     }
