@@ -124,43 +124,46 @@ enum Cutting {
         }
     }
 
-    /// Drops the least dense segments (never the first: it carries the hook) until the total fits,
-    /// then trims the last segment at a word boundary if needed.
+    /// Drops the least dense segments (never the first: it carries the hook) until the total fits, then trims the
+    /// last segment at a word boundary if needed. Fast pauses have no words, so they go first, each leaving the hard
+    /// cut the pause would have had without the speed-up.
     static func fit(_ segments: [Segment], maxDuration: Double, report: inout DraftReport) -> [Segment] {
         var segs = segments
-        var total = segs.reduce(0) { $0 + $1.duration }
+        var total = segs.reduce(0) { $0 + $1.timelineDuration }
         guard total > maxDuration else { return segs }
         var dropped = 0
         while total > maxDuration, segs.count > 1 {
             let candidates = segs.indices.dropFirst()
             guard let worst = candidates.min(by: { (segs[$0].density, -Double($0)) < (segs[$1].density, -Double($1)) }) else { break }
-            total -= segs[worst].duration
+            total -= segs[worst].timelineDuration
             segs.remove(at: worst)
             dropped += 1
         }
         if total > maxDuration, var last = segs.popLast() {
-            let budget = maxDuration - (total - last.duration)
-            var end = last.start + budget
+            let budget = maxDuration - (total - last.timelineDuration)
+            var end = last.start + budget * last.speed
             if let w = last.words.last(where: { $0.end <= end }) { end = min(end, w.end + 0.12) }
             last.end = max(last.start + 0.2, end)
             last.words = last.words.filter { $0.end <= last.end }
             segs.append(last)
         }
         report.notes.append(String(format: "Trimmed to %.1fs (max %.0fs) by dropping %d low-density segment%@",
-                                   segs.reduce(0) { $0 + $1.duration }, maxDuration, dropped, dropped == 1 ? "" : "s"))
+                                   segs.reduce(0) { $0 + $1.timelineDuration }, maxDuration, dropped, dropped == 1 ? "" : "s"))
         return segs
     }
 
     /// Moves each cut, and the final end, onto the nearest timeline beat when it is within `rule.tolerance`, by moving
     /// the end of the segment before it. Earlier moves shift later cuts, so each cut is measured after the previous
     /// snap. A cut stays put rather than cross a word, leave the clip, or overlap the next piece of the same clip.
+    /// Both ends of a fast pause stay put: moving one would open a gap in footage that plays straight through.
     static func beatSnap(_ segments: [Segment], beats: [Double], rule: BeatSnapRule,
                          clips: [ClipInput]) -> (segments: [Segment], moved: Int) {
         var segs = segments
         var moved = 0
         var cut = 0.0
         for k in segs.indices {
-            cut += segs[k].duration
+            cut += segs[k].timelineDuration
+            guard segs[k].speed == 1, k + 1 == segs.count || segs[k + 1].speed == 1 else { continue }
             guard let beat = beats.min(by: { abs($0 - cut) < abs($1 - cut) }) else { break }
             let delta = beat - cut
             guard delta != 0, abs(delta) <= rule.tolerance else { continue }

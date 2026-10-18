@@ -270,7 +270,7 @@ func kept(_ plan: SpeechPlan) -> [String] { plan.words.map(\.text) }
                      Item(name: "b", range: TimeRange(seconds: 6, 14), content: .text(TextContent(text: "b", style: "s")))]
         items[1].transform.zoom = .keyframes([Keyframe(.zero, 1), Keyframe(RationalTime(seconds: 2), 2)])
         let words = [TimedWord(text: "60", start: 4, end: 4.3, isFiller: false, cue: .number)]
-        let out = Visual.zooms(items, words: words, rule: PunchInRule(zoom: 1.12, minSpacing: 4, maxStill: 0))
+        let out = Visual.zooms(items, words: words, cuts: [6], rule: PunchInRule(zoom: 1.12, minSpacing: 4, maxStill: 0))
         #expect(out.items[0].transform.zoom.isAnimated)
         #expect(out.items[1].transform.zoom == items[1].transform.zoom)
         #expect(out.note == "Added 1 zoom (1 on emphasis, 0 for pacing)")

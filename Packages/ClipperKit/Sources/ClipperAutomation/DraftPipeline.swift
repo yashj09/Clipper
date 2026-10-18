@@ -74,7 +74,7 @@ public enum DraftPipeline {
             }
             if let maxDuration { segments = Cutting.fit(segments, maxDuration: maxDuration, report: &report) }
             if wantsMusic, let snapRule = rules.beatSnap {
-                let total = segments.reduce(0) { $0 + $1.duration }
+                let total = segments.reduce(0) { $0 + $1.timelineDuration }
                 music = Music.pick(input.music, policy: template.music, target: total, wantEnergy: nil,
                                    forced: input.settings.musicID, seed: input.settings.seed)
                 if let m = music, m.beats != nil {
@@ -87,6 +87,11 @@ public enum DraftPipeline {
                     }
                 }
             }
+            let pauses = segments.filter { $0.speed != 1 }
+            if let rate = rules.silenceCut?.speedUp?.rate, !pauses.isEmpty {
+                report.notes.append(String(format: "Sped up %d pauses (%.1fs → %.1fs at %.1fx)", pauses.count,
+                                           pauses.reduce(0) { $0 + $1.duration }, pauses.reduce(0) { $0 + $1.timelineDuration }, rate))
+            }
         }
 
         // 2. Lay out slots as tracks.
@@ -96,20 +101,30 @@ public enum DraftPipeline {
         var primaryTrackIndex: Int?
         var cursor = RationalTime.zero
         var segmentOf: [ItemID: Segment] = [:]
+        // Timeline times where the footage jumps. Where a segment continues the previous one (a fast pause and the
+        // speech either side), its source starts where the previous item's ends, and its length is rounded to land
+        // near the segment's end: frame rounding stays inside the pads instead of adding up along the run.
+        var cuts: [Double] = []
+        var previous: (seg: Segment, sourceEnd: Double)?
         for seg in segments {
             let clip = input.clips[seg.clip]
+            let continues = previous.map { $0.seg.clip == seg.clip && abs($0.seg.end - seg.start) < 1e-6 } ?? false
+            let sourceStart = continues ? previous!.sourceEnd : seg.start
             let start = cursor
-            let end = RationalTime.frames(start.seconds + seg.duration, rate)
+            let end = RationalTime.frames(start.seconds + (seg.end - sourceStart) / seg.speed, rate)
             guard end > start else { continue }
             let range = TimeRange(start: start, end: end)
             var item = Item(id: ids.uuid(), name: clip.asset.name, range: range,
-                            content: .media(MediaRef(asset: clip.asset.id, source: TimeRange(start: RationalTime(seconds: seg.start), duration: range.duration),
-                                                     useAudio: primary.useAudio)),
+                            content: .media(MediaRef(asset: clip.asset.id,
+                                                     source: TimeRange(start: RationalTime(seconds: sourceStart), duration: range.duration.timesSpeed(seg.speed)),
+                                                     speed: seg.speed, useAudio: primary.useAudio)),
                             transform: (alone ? primary.aloneTransform : nil) ?? primary.transform,
                             gain: declick(range.duration, base: primary.audioGain), origin: .auto(pass: "layout"), slot: primary.id)
             item.content = clampSource(item.content, to: clip.asset.info.duration)
+            if !primaryItems.isEmpty, !continues { cuts.append(start.seconds) }
             segmentOf[item.id] = seg
             primaryItems.append(item)
+            previous = (seg, item.content.mediaRef!.source.end.seconds)
             cursor = end
         }
         let duration = cursor
@@ -129,13 +144,14 @@ public enum DraftPipeline {
             }
             let transform = (alone ? slot.aloneTransform : nil) ?? slot.transform
             var items: [Item] = []
-            func add(_ clip: ClipInput, at start: RationalTime, source: Double, length: Double) {
+            func add(_ clip: ClipInput, at start: RationalTime, source: Double, length: Double, speed: Double = 1) {
                 let end = RationalTime.frames(start.seconds + length, rate)
                 guard end > start else { return }
                 let range = TimeRange(start: start, end: end)
                 var item = Item(id: ids.uuid(), name: clip.asset.name, range: range,
-                                content: .media(MediaRef(asset: clip.asset.id, source: TimeRange(start: RationalTime(seconds: source), duration: range.duration),
-                                                         useAudio: slot.useAudio)),
+                                content: .media(MediaRef(asset: clip.asset.id,
+                                                         source: TimeRange(start: RationalTime(seconds: source), duration: range.duration.timesSpeed(speed)),
+                                                         speed: speed, useAudio: slot.useAudio)),
                                 transform: transform, gain: declick(range.duration, base: slot.audioGain), origin: .auto(pass: "layout"), slot: slot.id)
                 item.content = clampSource(item.content, to: clip.asset.info.duration)
                 items.append(item)
@@ -147,7 +163,7 @@ public enum DraftPipeline {
                     guard let ref = p.content.mediaRef else { continue }
                     let src = ref.source.start.seconds
                     guard src < clip.range.upperBound else { continue }
-                    add(clip, at: p.start, source: src, length: min(p.range.duration.seconds, clip.range.upperBound - src))
+                    add(clip, at: p.start, source: src, length: min(p.range.duration.seconds, (clip.range.upperBound - src) / ref.speed), speed: ref.speed)
                 }
             case .loop:
                 let clip = clips[0]
@@ -183,7 +199,7 @@ public enum DraftPipeline {
                 items = items.map { reframed($0, input: input, slot: primary, transform: $0.transform, canvas: template.canvas) }
             }
             if let rule = rules.punchIn {
-                let z = Visual.zooms(items, words: spoken, rule: rule)
+                let z = Visual.zooms(items, words: spoken, cuts: cuts, rule: rule)
                 items = z.items
                 if let note = z.note { report.notes.append(note) }
             }

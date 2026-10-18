@@ -13,7 +13,8 @@ struct ZoomCurve: Equatable {
         /// Emphasis punches ease; pacing pushes drift at a steady rate.
         var interpolation: Interpolation { reason == .pacing ? .linear : .easeInOut }
     }
-    /// Sorted. Each move ends before the next starts, and no move straddles a cut.
+    /// Sorted. Each move ends before the next starts, and no move straddles a cut. A move may straddle the boundary
+    /// between items that play continuously.
     var moves: [Move]
 
     func value(at t: Double) -> Double {
@@ -29,12 +30,13 @@ struct ZoomCurve: Equatable {
         return level
     }
 
-    /// Keyframes relative to the item's start, times `base`. A flat result collapses to a constant.
+    /// Keyframes relative to the item's start, times `base`. A move already under way at the start finishes from
+    /// where it is. A flat result collapses to a constant.
     func zoom(over range: TimeRange, base: Double) -> Param<Double> {
         let t0 = range.start.seconds, t1 = range.end.seconds
         var keys = [Keyframe(.zero, base * value(at: t0), .hold)]
-        for m in moves where m.duration > 0 && m.start >= t0 && m.start < t1 {
-            let from = Keyframe(RationalTime(seconds: m.start - t0), base * value(at: m.start), m.interpolation)
+        for m in moves where m.duration > 0 && m.start + m.duration > t0 && m.start < t1 {
+            let from = Keyframe(RationalTime(seconds: max(0, m.start - t0)), base * value(at: max(m.start, t0)), m.interpolation)
             if keys[keys.count - 1].time == from.time { keys[keys.count - 1] = from } else { keys.append(from) }
             keys.append(Keyframe(RationalTime(seconds: m.start + m.duration - t0), base * m.to, .hold))
         }
@@ -100,11 +102,12 @@ extension Visual {
         return ZoomCurve(moves: moves)
     }
 
-    /// Writes the curve into the items' `transform.zoom`, on top of each item's own constant zoom. Items whose zoom is
-    /// already keyframed are left alone.
-    static func zooms(_ items: [Item], words: [TimedWord], rule: PunchInRule) -> (items: [Item], note: String?) {
+    /// Writes the curve into the items' `transform.zoom`, on top of each item's own constant zoom. `cuts` are the
+    /// timeline times where the footage jumps, which are not every item start: a fast pause plays straight on.
+    /// Items whose zoom is already keyframed are left alone.
+    static func zooms(_ items: [Item], words: [TimedWord], cuts: [Double], rule: PunchInRule) -> (items: [Item], note: String?) {
         guard let last = items.last else { return (items, nil) }
-        let curve = zoomCurve(words: words, cuts: items.dropFirst().map(\.start.seconds), end: last.end.seconds, rule: rule)
+        let curve = zoomCurve(words: words, cuts: cuts, end: last.end.seconds, rule: rule)
         var out = items
         for i in out.indices where !out[i].transform.zoom.isAnimated {
             out[i].transform.zoom = curve.zoom(over: out[i].range, base: out[i].transform.zoom.value(at: .zero))
