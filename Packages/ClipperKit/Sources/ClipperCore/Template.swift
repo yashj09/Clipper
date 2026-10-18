@@ -206,7 +206,33 @@ public struct HookRule: Codable, Sendable, Equatable {
 
 public struct CaptionRule: Codable, Sendable, Equatable {
     public var style: String
-    public init(style: String) { self.style = style }
+    /// Keywords with an emoji show it after the word, at most one per page.
+    public var emoji: Bool
+    public init(style: String, emoji: Bool = false) { self.style = style; self.emoji = emoji }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        style = try c.decode(String.self, forKey: .style)
+        emoji = try c.decodeIfPresent(Bool.self, forKey: .emoji) ?? false
+    }
+}
+
+/// A keyword (name, place, organization, number, or noun with an emoji) shown large on its own for a moment.
+public struct CalloutRule: Codable, Sendable, Equatable {
+    public var seconds: Double
+    /// Least time between two callouts' starts.
+    public var minSpacing: Double
+    public var style: String
+    public init(seconds: Double = 1.6, minSpacing: Double = 8, style: String = "callout") {
+        self.seconds = seconds; self.minSpacing = minSpacing; self.style = style
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        seconds = try c.decodeIfPresent(Double.self, forKey: .seconds) ?? 1.6
+        minSpacing = try c.decodeIfPresent(Double.self, forKey: .minSpacing) ?? 8
+        style = try c.decodeIfPresent(String.self, forKey: .style) ?? "callout"
+    }
 }
 
 public struct Rules: Codable, Sendable, Equatable {
@@ -224,14 +250,15 @@ public struct Rules: Codable, Sendable, Equatable {
     /// Clips without speech are trimmed to at most this long (their middle), e.g. travel B-roll.
     public var maxSilentClip: Double?
     public var hook: HookRule?
+    public var callouts: CalloutRule?
 
     public init(maxDuration: Double? = nil, speechEdits: SpeechEditRule? = nil, silenceCut: SilenceCutRule? = nil, beatCut: BeatCutRule? = nil,
                 beatSnap: BeatSnapRule? = nil, punchIn: PunchInRule? = nil, captions: CaptionRule? = nil, duck: DuckRule? = nil, loudnessTarget: Double? = -14,
-                maxSilentClip: Double? = nil, hook: HookRule? = nil) {
+                maxSilentClip: Double? = nil, hook: HookRule? = nil, callouts: CalloutRule? = nil) {
         self.maxDuration = maxDuration; self.speechEdits = speechEdits; self.silenceCut = silenceCut; self.beatCut = beatCut; self.beatSnap = beatSnap
         self.punchIn = punchIn
         self.captions = captions; self.duck = duck; self.loudnessTarget = loudnessTarget; self.maxSilentClip = maxSilentClip
-        self.hook = hook
+        self.hook = hook; self.callouts = callouts
     }
 }
 

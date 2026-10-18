@@ -8,11 +8,15 @@ struct TimedWord {
     var end: Double
     var isFiller: Bool
     var cue: Cue = []
+    var emoji: String?
 }
 
 enum Captions {
     /// Groups words into caption pages: at most `style.wordsPerPage` words, breaking at sentence ends and pauses.
-    static func items(words: [TimedWord], styleName: String, style: TextStyle, rate: FrameRate, ids: inout IDGenerator) -> [Item] {
+    /// With `emoji`, the first keyword on a page that has one gets it ("money 💰"), except on the first page, where
+    /// the title is.
+    static func items(words: [TimedWord], styleName: String, style: TextStyle, rate: FrameRate, emoji: Bool = false,
+                      ids: inout IDGenerator) -> [Item] {
         let spoken = words.filter { !$0.isFiller }.sorted { $0.start < $1.start }
         var pages: [[TimedWord]] = []
         var current: [TimedWord] = []
@@ -41,8 +45,9 @@ enum Captions {
             var end = RationalTime.frames(endSeconds, rate)
             if end <= start { end = start + rate.frameDuration }
             if let prev = items.last, prev.end > start { items[items.count - 1].range = TimeRange(start: prev.start, end: start) }
-            let words = page.map { w in
-                CaptionContent.Word(text: display(w.text, style: style),
+            let decorated = emoji && i > 0 ? page.firstIndex { $0.cue.contains(.keyword) && $0.emoji != nil } : nil
+            let words = page.enumerated().map { k, w in
+                CaptionContent.Word(text: display(w.text, style: style) + (k == decorated ? " " + w.emoji! : ""),
                                     start: RationalTime(seconds: max(0, w.start - start.seconds)),
                                     end: RationalTime(seconds: max(0, w.end - start.seconds)),
                                     emphasis: w.cue.highlights)

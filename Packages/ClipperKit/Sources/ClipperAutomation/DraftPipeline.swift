@@ -230,11 +230,18 @@ public enum DraftPipeline {
             timeline.tracks[pti].items = items
         }
 
-        // 4. Captions.
+        // 4. Captions. A word with a callout shows its emoji there, not twice.
+        let callouts = rules.callouts.map { Visual.calloutWords(spoken, rule: $0, duration: duration.seconds) } ?? []
+        let calledOut = Set(callouts.map(\.start))
+        let captionWords = spoken.map { w in
+            var w = w
+            if calledOut.contains(w.start) { w.emoji = nil }
+            return w
+        }
         let captionsOn = input.settings.captions ?? (rules.captions != nil)
         if captionsOn, let rule = rules.captions {
             if let style = styles[rule.style] {
-                let caps = Captions.items(words: spoken, styleName: rule.style, style: style, rate: rate, ids: &ids)
+                let caps = Captions.items(words: captionWords, styleName: rule.style, style: style, rate: rate, emoji: rule.emoji, ids: &ids)
                 if !caps.isEmpty {
                     // Tag the captions with the transcript's language so they export as `<name>.<lang>.srt` too
                     // and translations know their source language.
@@ -298,6 +305,15 @@ public enum DraftPipeline {
             timeline.tracks.append(Track(id: ids.uuid(), kind: element.track, name: element.id.capitalized, items: [item]))
         }
 
+        // 7. Keyword callouts.
+        if let rule = rules.callouts {
+            let items = Visual.callouts(callouts, rule: rule, styles: styles, rate: rate, duration: duration.seconds, ids: &ids)
+            if !items.isEmpty {
+                timeline.tracks.append(Track(id: ids.uuid(), kind: .overlay, name: "Callouts", items: items))
+                report.notes.append(String(format: "Added %d callout%@", items.count, items.count == 1 ? "" : "s"))
+            }
+        }
+
         // Drawn last so no earlier ID depends on how many retakes there were.
         timeline.markers = Speech.takeMarkers(plans, clips: input.clips, items: primaryItems, rate: rate, ids: &ids)
         if let open = coldOpen {
@@ -312,7 +328,7 @@ public enum DraftPipeline {
         }.map(\.element)
 
         timeline.provenance = Provenance(template: template.id, templateVersion: template.version, seed: input.settings.seed,
-                                         passes: ["cut", "layout", "visual", "captions", "music", "elements"],
+                                         passes: ["cut", "layout", "visual", "captions", "music", "elements", "callouts"],
                                          inputs: input.record)
         timeline.metadata = primaryClips.lazy.compactMap(\.analysis.brief).first
             .map { TimelineMetadata(description: $0.description, hashtags: $0.hashtags) }
@@ -331,6 +347,7 @@ public enum DraftPipeline {
         if rules.speechEdits != nil || rules.silenceCut != nil || rules.captions != nil || rules.duck != nil {
             kinds.formUnion([.speech, .transcript])
         }
+        if rules.callouts != nil || rules.captions?.emoji == true { kinds.formUnion([.speech, .transcript, .keywords]) }
         if template.slots.contains(where: { $0.reframe == .face }) { kinds.insert(.faces) }
         if template.slots.contains(where: { $0.reframe == .saliency }) { kinds.insert(.visual) }
         return kinds

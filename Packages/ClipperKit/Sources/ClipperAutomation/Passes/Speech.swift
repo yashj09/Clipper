@@ -17,11 +17,13 @@ struct Cue: OptionSet, Sendable, Hashable {
     static let afterPause = Cue(rawValue: 1 << 5)
     /// Emphasis already decided (the user's, on a caption being re-paged).
     static let marked = Cue(rawValue: 1 << 6)
+    /// A name, place, organization or number, or a noun with an emoji, from the keyword tags.
+    static let keyword = Cue(rawValue: 1 << 7)
 
     /// Caption highlight: word-level salience only. A highlighted "So" at every sentence start would be noise.
-    var highlights: Bool { !isDisjoint(with: [.number, .exclaim, .caps, .loud, .marked]) }
-    /// Zoom candidate: any cue, so every highlighted word can carry a zoom.
-    var zooms: Bool { !isEmpty }
+    var highlights: Bool { !isDisjoint(with: [.number, .exclaim, .caps, .loud, .marked, .keyword]) }
+    /// Zoom candidate: any cue but `keyword`. Keywords get callouts; zooming on each as well would be too busy.
+    var zooms: Bool { !subtracting(.keyword).isEmpty }
 }
 
 /// A transcript word with its cue. Reads like a `TranscriptWord` (`w.start`, `w.isFiller`).
@@ -33,6 +35,8 @@ struct SpokenWord: Equatable {
     var sentence: Int = 0
     /// The brief's score for `sentence`; nil without a brief that scores every sentence.
     var importance: Double?
+    /// From the keyword tags.
+    var emoji: String?
     subscript<T>(dynamicMember path: KeyPath<TranscriptWord, T>) -> T { word[keyPath: path] }
 }
 
@@ -81,6 +85,7 @@ struct SpeechPlan: Equatable {
         let sentenceRanges = Transcript.sentences(every)
         for (s, r) in sentenceRanges.enumerated() { for i in r { sentenceOf[i] = s } }
         let scores = clip.analysis.brief.flatMap { $0.sentenceImportance.count == sentenceRanges.count ? $0.sentenceImportance : nil }
+        let tags = Dictionary((clip.analysis.keywords?.tags ?? []).map { ($0.word, $0) }, uniquingKeysWith: { a, _ in a })
         let english = transcript.map { Locale.Language(identifier: $0.locale).languageCode == .english } ?? false
         let drops = rule?.falseStarts == true ? Speech.restarts(all, english: english) : []
         var excluded = RangeSet<Double>()
@@ -105,8 +110,11 @@ struct SpeechPlan: Equatable {
         }
         let cues = Speech.cues(left, sentences: sentences, speech: clip.analysis.speech, english: english)
         words = left.indices.filter { !retaken.contains($0) }.map { i in
-            let sentence = sentenceOf[inClip[survivors[i]]]
-            return SpokenWord(word: left[i], cue: cues[i], sentence: sentence, importance: scores?[sentence])
+            let index = inClip[survivors[i]]
+            let tag = left[i].isFiller ? nil : tags[index]
+            var cue = cues[i]
+            if let tag, tag.kind != .emphasis, tag.kind != .noun || tag.emoji != nil { cue.insert(.keyword) }
+            return SpokenWord(word: left[i], cue: cue, sentence: sentenceOf[index], importance: scores?[sentenceOf[index]], emoji: tag?.emoji)
         }
         self.excluded = excluded
         removedRestarts = drops.count
@@ -287,7 +295,7 @@ enum Speech {
             let a = ref.source.start.seconds, b = ref.source.end.seconds
             for w in seg.words where w.start >= a - 0.02 && w.end <= b + 0.02 {
                 out.append(TimedWord(text: w.text, start: max(w.start + offset, item.start.seconds),
-                                     end: min(w.end + offset, item.end.seconds), isFiller: w.isFiller, cue: w.cue))
+                                     end: min(w.end + offset, item.end.seconds), isFiller: w.isFiller, cue: w.cue, emoji: w.emoji))
             }
         }
         return out

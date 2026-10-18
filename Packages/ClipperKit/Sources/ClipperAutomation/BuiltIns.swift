@@ -23,6 +23,9 @@ public enum BuiltIns {
         "title-bold": TextStyle(font: "AvenirNext-Heavy", size: 0.05, color: .white, shadow: nil,
                                 box: .init(color: RGBA(0, 0, 0, 0.55), padding: 0.35, cornerRadius: 0.25),
                                 maxWidth: 0.84, position: NormPoint(0.5, 0.13), wordsPerPage: 99, maxLines: 3),
+        // A keyword alone, large, above the bold-pop captions.
+        "callout": TextStyle(font: "AvenirNext-Heavy", size: 0.07, color: .white, stroke: .black, strokeWidth: 0.09,
+                             uppercase: true, maxWidth: 0.8, position: NormPoint(0.5, 0.30), wordsPerPage: 99),
         "title-clean": TextStyle(font: "HelveticaNeue-Bold", size: 0.045, color: .white, maxWidth: 0.84,
                                  position: NormPoint(0.5, 0.15), wordsPerPage: 99, maxLines: 3),
     ]
@@ -43,7 +46,8 @@ public enum BuiltIns {
         elements: [title("title-bold", seconds: 2.5)],
         rules: Rules(maxDuration: 60, speechEdits: SpeechEditRule(), silenceCut: SilenceCutRule(minGap: 0.35), beatSnap: BeatSnapRule(),
                      punchIn: PunchInRule(zoom: 1.12, minSpacing: 4),
-                     captions: CaptionRule(style: "bold-pop"), duck: DuckRule(depth: 14), hook: HookRule()),
+                     captions: CaptionRule(style: "bold-pop", emoji: true), duck: DuckRule(depth: 14), hook: HookRule(),
+                     callouts: CalloutRule()),
         music: MusicPolicy(moods: ["chill", "upbeat", "inspiring"], minBPM: 80, maxBPM: 125, gain: -22))
 
     public static let gameplay = Template(

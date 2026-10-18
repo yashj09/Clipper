@@ -79,11 +79,12 @@ Ingest → probe → mezzanine/proxy → analysis jobs (transcript, speechActivi
 | 5 | Hook | With `rules.hook` (on in talking head) and an LLM brief naming a hook sentence: that sentence moves to the front and plays once, followed by a 0.15 s dip to white, a "Hook" marker at 0 and a "Cold open" note. Skipped when the sentence was cut, already opens the draft, runs over `maxSeconds` (4 s), scores under `minImportance` (0.6), or shares a segment with another sentence. No brief, no cold open: there is no heuristic fallback |
 | 6 | PickMusic | Score by mood + BPM range + length fit; end on a phrase or downbeat; add CC attribution |
 | 7 | BeatSnap | Move cut points to the nearest beat (never inside speech) |
-| 8 | Captions | Group words into lines and apply a style preset |
-| 9 | PunchIns | One zoom curve over the track. Cued words zoom in or out at least minSpacing apart, stepping on a cut just before them; a slow push fills any stretch over maxStill with no cut or zoom. No move straddles a cut |
-| 10 | Reframe | Face track → spring-smoothed crop keyframes, simplified with Ramer–Douglas–Peucker |
-| 11 | Duck | Volume ramps on music under speech (−12 dB, 150 ms attack, 400 ms release) |
-| 12 | LoudnessTarget | Applied at export |
+| 8 | Captions | Group words into lines and apply a style preset. Keywords (names, places, organizations, numbers, nouns with an emoji, from the keyword tags) take the emphasis colour; with `emoji` (on in talking head) the first keyword with an emoji on a page shows it ("money 💰"), never on the first page and never on a word that has a callout |
+| 9 | Callouts | With `rules.callouts` (on in talking head): keywords shown large in the "callout" style above the captions for 1.6 s, at least 8 s apart, none in the first 2.5 s (the title) or the last second. Keywords are not zoom cues |
+| 10 | PunchIns | One zoom curve over the track. Cued words zoom in or out at least minSpacing apart, stepping on a cut just before them; a slow push fills any stretch over maxStill with no cut or zoom. No move straddles a cut |
+| 11 | Reframe | Face track → spring-smoothed crop keyframes, simplified with Ramer–Douglas–Peucker |
+| 12 | Duck | Volume ramps on music under speech (−12 dB, 150 ms attack, 400 ms release) |
+| 13 | LoudnessTarget | Applied at export |
 
 ## Concurrency
 - Swift 6 strict concurrency throughout.

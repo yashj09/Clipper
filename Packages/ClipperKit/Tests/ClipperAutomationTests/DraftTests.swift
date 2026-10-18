@@ -170,7 +170,7 @@ func talkingInput(seed: UInt64 = 7, title: String? = "Local editing in 60s") -> 
     }
 
     @Test func analysisKindsCoverWhatEachBuiltInReads() {
-        #expect(DraftPipeline.analysisKinds(for: BuiltIns.talkingHead) == [.speech, .transcript, .faces])
+        #expect(DraftPipeline.analysisKinds(for: BuiltIns.talkingHead) == [.speech, .transcript, .faces, .keywords])
         #expect(DraftPipeline.analysisKinds(for: BuiltIns.gameplay) == [.speech, .transcript, .faces, .visual])
         #expect(DraftPipeline.analysisKinds(for: BuiltIns.montage) == [.visual])
         #expect(DraftPipeline.analysisKinds(for: BuiltIns.vlog) == [.speech, .transcript, .faces])

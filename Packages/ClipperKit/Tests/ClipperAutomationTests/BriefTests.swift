@@ -150,3 +150,67 @@ func plays(_ t: Timeline, _ w: TranscriptWord) -> Bool {
         #expect(!r.report.notes.contains { $0.hasPrefix("Cold open") })
     }
 }
+
+@Suite struct KeywordTests {
+    func tagged(_ tags: [KeywordTags.Tag]) -> ClipInput {
+        var clip = briefedInput(nil).clips[0]
+        clip.analysis.keywords = KeywordTags(tags: tags)
+        return clip
+    }
+
+    @Test func namesNumbersAndEmojiNounsAreKeywords() {
+        let plan = SpeechPlan(clip: tagged([
+            .init(word: 1, kind: .person, lemma: "back"), .init(word: 7, kind: .noun, lemma: "editor"),
+            .init(word: 15, kind: .noun, lemma: "machine", emoji: "💻"), .init(word: 27, kind: .emphasis, lemma: "all"),
+            .init(word: 30, kind: .number, lemma: "by"),
+        ]), rule: nil)
+        let keywords = plan.words.filter { $0.cue.contains(.keyword) }.map(\.text)
+        #expect(keywords == ["back", "machine", "by"])
+        #expect(plan.words[15].emoji == "💻")
+        #expect(Cue.keyword.highlights && !Cue.keyword.zooms)
+        #expect(Cue([.keyword, .caps]).zooms)
+    }
+
+    func word(_ text: String, at t: Double, keyword: Bool = false, emoji: String? = nil) -> TimedWord {
+        TimedWord(text: text, start: t, end: t + 0.3, isFiller: false, cue: keyword ? .keyword : [], emoji: emoji)
+    }
+
+    @Test func captionPagesAfterTheFirstGetOneEmoji() {
+        let words = [word("Save", at: 0.5, keyword: true, emoji: "💾"), word("money.", at: 0.85, keyword: true, emoji: "💰"),
+                     word("Real", at: 2, keyword: true, emoji: "✅"), word("money", at: 2.35, keyword: true, emoji: "💰"),
+                     word("now.", at: 2.7), word("No", at: 4), word("emoji", at: 4.35, emoji: "😀")]
+        var ids = IDGenerator(seed: 1)
+        let style = BuiltIns.styles["bold-pop"]!
+        let pages = Captions.items(words: words, styleName: "bold-pop", style: style, rate: .fps30, emoji: true, ids: &ids)
+            .compactMap { item -> [String]? in if case .caption(let c) = item.content { c.words.map(\.text) } else { nil } }
+        #expect(pages == [["Save", "money"], ["Real ✅", "money", "now"], ["No", "emoji"]])
+        var plainIDs = IDGenerator(seed: 1)
+        let plain = Captions.items(words: words, styleName: "bold-pop", style: style, rate: .fps30, ids: &plainIDs)
+        #expect(!plain.contains { if case .caption(let c) = $0.content { c.text.contains("✅") } else { false } })
+    }
+
+    @Test func calloutsSkipTheTitleAndEndAndKeepTheirDistance() {
+        let words = [word("Apple", at: 1, keyword: true), word("49%,", at: 3, keyword: true), word("Paris", at: 6, keyword: true),
+                     word("pizza.", at: 11.5, keyword: true, emoji: "🍕"), word("plain", at: 13), word("Rome", at: 19.5, keyword: true)]
+        var ids = IDGenerator(seed: 1)
+        let picked = Visual.calloutWords(words, rule: CalloutRule(), duration: 20)
+        let items = Visual.callouts(picked, rule: CalloutRule(), styles: BuiltIns.styles, rate: .fps30, duration: 20, ids: &ids)
+        #expect(items.compactMap { if case .text(let t) = $0.content { t.text } else { nil } } == ["49%", "pizza 🍕"])
+        #expect(items[1].range.duration == RationalTime.frames(1.6, .fps30))
+        #expect(items.allSatisfy { $0.origin == .auto(pass: "callouts") && $0.transform.position == .constant(NormPoint(0.5, 0.30)) })
+    }
+
+    @Test func talkingHeadDraftsGetACalloutTrack() throws {
+        var input = briefedInput(nil)
+        input.clips[0].analysis.keywords = KeywordTags(tags: [.init(word: 22, kind: .noun, lemma: "subscription", emoji: "💸")])
+        let r = DraftPipeline.run(input)
+        let track = try #require(r.timeline.tracks.first { $0.name == "Callouts" })
+        #expect(track.kind == .overlay && track.items.count == 1)
+        #expect(r.report.notes.contains("Added 1 callout"))
+        let callout = try #require(track.items.first)
+        #expect(callout.content == .text(TextContent(text: "subscriptions 💸", style: "callout")))
+        let captions = try #require(r.timeline.tracks.first { $0.kind == .caption })
+        #expect(captions.items.contains { if case .caption(let c) = $0.content { c.words.contains { $0.text == "subscriptions" } } else { false } })
+        #expect(!captions.items.contains { if case .caption(let c) = $0.content { c.text.contains("💸") } else { false } })
+    }
+}
