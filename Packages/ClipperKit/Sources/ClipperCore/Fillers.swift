@@ -1,4 +1,3 @@
-import ClipperCore
 import Foundation
 
 public enum Fillers {

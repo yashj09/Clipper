@@ -56,7 +56,7 @@ func talkingInput(seed: UInt64 = 7, title: String? = "Local editing in 60s") -> 
 @Suite struct CuttingTests {
     @Test func silenceCutMergesShortPausesAndCutsLongOnesAndFillers() {
         let tr = transcript(["one two", "um", "three four", "five"], start: 1, pauses: [0.2, 0.2, 1.5])
-        let ranges = Cutting.keepRanges(words: tr.words, speech: [], clip: 0...20, rule: SilenceCutRule(minGap: 0.4, padBefore: 0.08, padAfter: 0.12))
+        let ranges = Cutting.keepRanges(words: tr.words, speech: nil, clip: 0...20, rule: SilenceCutRule(minGap: 0.4, padBefore: 0.08, padAfter: 0.12))
         // "one two" | (um removed) | "three four" | (1.5 s pause) | "five"
         #expect(ranges.count == 3)
         let um = tr.words.first { $0.isFiller }!
@@ -64,8 +64,21 @@ func talkingInput(seed: UInt64 = 7, title: String? = "Local editing in 60s") -> 
         #expect(abs(ranges[0].lowerBound - 0.92) < 1e-9)   // padded 80 ms before the first word
     }
 
+    @Test func silenceCutRemovesVoicedStretchesWithoutAWord() {
+        let words = [TranscriptWord(text: "so", start: 1.0, end: 1.3), TranscriptWord(text: "then", start: 1.6, end: 1.9)]
+        func activity(_ spans: [SpeechActivity.Span]) -> SpeechActivity {
+            SpeechActivity(spans: spans, rms: Envelope(hop: 0.01, values: []), noiseFloor: -60, threshold: -50)
+        }
+        let rule = SilenceCutRule()
+        let breath = activity([.init(start: 1.0, end: 1.3), .init(start: 1.32, end: 1.57), .init(start: 1.6, end: 1.9)])
+        #expect(Cutting.keepRanges(words: words, speech: breath, clip: 0...5, rule: rule).count == 2)
+        let wordsOnly = activity([.init(start: 1.0, end: 1.3), .init(start: 1.6, end: 1.9)])
+        #expect(Cutting.keepRanges(words: words, speech: wordsOnly, clip: 0...5, rule: rule).count == 1)
+        #expect(Cutting.keepRanges(words: [], speech: breath, clip: 0...5, rule: rule).count == 1)
+    }
+
     @Test func clipWithoutSpeechIsKeptWhole() {
-        #expect(Cutting.keepRanges(words: [], speech: [], clip: 2...9, rule: SilenceCutRule()) == [2...9])
+        #expect(Cutting.keepRanges(words: [], speech: nil, clip: 2...9, rule: SilenceCutRule()) == [2...9])
     }
 
     @Test func beatSnapLandsCutsOnBeatsOutsideSpeech() {
