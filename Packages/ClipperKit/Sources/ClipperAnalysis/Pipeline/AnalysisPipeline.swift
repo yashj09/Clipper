@@ -40,7 +40,8 @@ public enum AnalysisPipelineError: Error, Sendable, CustomStringConvertible {
 ///   Cache write failures are ignored (the result is still returned; it will simply be recomputed next time).
 /// - Applicability: kinds that don't apply are skipped, not errors. No audio track → no speech/transcript/loudness/
 ///   events; `faces` and `visual` need a video or image; `beats` only runs for audio-only (music) assets.
-///   Requesting `transcript` also computes (and returns) `speech`, which the snapper needs.
+///   Requesting `transcript` also computes (and returns) `speech`, which the snapper needs. Requesting `keywords`
+///   also returns the transcript they were tagged from; tagging runs on the snapped, filler-marked transcript.
 /// - Concurrency: up to `maxConcurrent` assets are analyzed at once (further calls wait for a slot, FIFO).
 ///   Within one asset the independent analyzers run in parallel (audio decode, ANE transcription, video decode).
 /// - Errors/cancellation: an analyzer failure does not stop the others; successes are cached and the call throws
@@ -107,6 +108,11 @@ public actor AnalysisPipeline {
             KindSpec(version: 1, applies: \.hasAudio, id: { "events.\(eventsSignature($0.events))" }, output: Output.events)
         case .visual:
             KindSpec(version: 1, applies: \.hasVideo, id: { "visual.\(visualSignature($0.visual))" }, output: Output.visual)
+        case .keywords:
+            // Tags index transcript words, so they are only valid for the transcript they were made from.
+            KindSpec(version: 1, applies: \.hasAudio,
+                     id: { "keywords.\(analyzerID(.transcript, options: $0)).t\(version(of: .transcript))" },
+                     output: Output.keywords)
         }
     }
 
@@ -156,11 +162,13 @@ public actor AnalysisPipeline {
         case beats(BeatGrid)
         case events(SoundEvents)
         case visual(VisualActivity)
+        case keywords(KeywordTags)
     }
 
     private static func run(_ asset: MediaAsset, kinds: Set<AnalysisKind>, cache: (any AnalysisCache)?,
                             options: AnalysisOptions, progress: Progress?) async throws -> AssetAnalysis {
         var plan = applicableKinds(kinds, for: asset.info)
+        if plan.contains(.keywords) { plan.insert(.transcript) }
         if plan.contains(.transcript) { plan.insert(.speech) }
         guard !plan.isEmpty else { return AssetAnalysis() }
         let url = asset.renderURL
@@ -178,6 +186,7 @@ public actor AnalysisPipeline {
                 misses.insert(kind)
             }
         }
+        let tagKeywords = misses.remove(.keywords) != nil
         let shared = sharedAudioKinds(misses, options: options)
 
         let computed = await withTaskGroup(of: [(AnalysisKind, Result<Output, Error>)].self,
@@ -212,6 +221,7 @@ public actor AnalysisPipeline {
             case .success(.beats(let b)): analysis.beats = b
             case .success(.events(let e)): analysis.events = e
             case .success(.visual(let v)): analysis.visual = v
+            case .success(.keywords(let k)): analysis.keywords = k
             case .failure(let error):
                 if error is CancellationError { throw error }
                 failures[kind] = String(describing: error)
@@ -221,6 +231,11 @@ public actor AnalysisPipeline {
             if let speech = analysis.speech { t.words = BoundarySnapper.snap(t.words, activity: speech) }
             t.words = Fillers.markFillers(t.words)
             analysis.transcript = t
+            if tagKeywords {
+                let final = t
+                analysis.keywords = try await Self.computed(.keywords, analyzerID(.keywords, options: options), key, cache,
+                                                            progress) { KeywordTagger.tag(final) }
+            }
         }
         if !failures.isEmpty { throw AnalysisPipelineError.analyzersFailed(failures, partial: analysis) }
         return analysis
@@ -270,6 +285,8 @@ public actor AnalysisPipeline {
                     try await options.visual.analyze(url: url, info: info, range: nil, progress: report)
                 }
                 return .success(.visual(v))
+            case .keywords:
+                preconditionFailure("keywords are tagged from the final transcript in run(), never computed here")
             }
         } catch {
             return .failure(error)

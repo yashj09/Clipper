@@ -4,7 +4,7 @@ import Foundation
 // Times are in seconds of *source* media: analysis is per asset, independent of any timeline.
 
 public enum AnalysisKind: String, Sendable, CaseIterable, Codable {
-    case speech, transcript, loudness, faces, beats, events, visual
+    case speech, transcript, loudness, faces, beats, events, visual, keywords
 }
 
 public struct TranscriptWord: Codable, Sendable, Equatable {
@@ -148,6 +148,23 @@ public struct VisualActivity: Codable, Sendable, Equatable {
     public init(samples: [VisualSample], sceneCuts: [Double]) { self.samples = samples; self.sceneCuts = sceneCuts }
 }
 
+/// Words worth calling out, from on-device part-of-speech and entity tagging. Indices into `Transcript.words`.
+public struct KeywordTags: Codable, Sendable, Equatable {
+    public enum Kind: String, Codable, Sendable { case number, person, place, organization, noun, emphasis }
+    public struct Tag: Codable, Sendable, Equatable {
+        public var word: Int
+        public var kind: Kind
+        /// Lowercased dictionary form ("videos" → "video").
+        public var lemma: String
+        public var emoji: String?
+        public init(word: Int, kind: Kind, lemma: String, emoji: String? = nil) {
+            self.word = word; self.kind = kind; self.lemma = lemma; self.emoji = emoji
+        }
+    }
+    public var tags: [Tag]
+    public init(tags: [Tag]) { self.tags = tags }
+}
+
 /// Everything known about one asset. Fields are nil until that analyzer has run.
 public struct AssetAnalysis: Codable, Sendable, Equatable {
     public var transcript: Transcript?
@@ -157,10 +174,12 @@ public struct AssetAnalysis: Codable, Sendable, Equatable {
     public var beats: BeatGrid?
     public var events: SoundEvents?
     public var visual: VisualActivity?
+    public var keywords: KeywordTags?
     public init(transcript: Transcript? = nil, speech: SpeechActivity? = nil, loudness: LoudnessInfo? = nil,
-                faces: FaceTrack? = nil, beats: BeatGrid? = nil, events: SoundEvents? = nil, visual: VisualActivity? = nil) {
+                faces: FaceTrack? = nil, beats: BeatGrid? = nil, events: SoundEvents? = nil, visual: VisualActivity? = nil,
+                keywords: KeywordTags? = nil) {
         self.transcript = transcript; self.speech = speech; self.loudness = loudness; self.faces = faces; self.beats = beats
-        self.events = events; self.visual = visual
+        self.events = events; self.visual = visual; self.keywords = keywords
     }
 }
 

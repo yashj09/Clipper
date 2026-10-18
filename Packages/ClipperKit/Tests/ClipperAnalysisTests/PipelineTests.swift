@@ -316,6 +316,38 @@ private final class CountingCache: AnalysisCache {
         #expect(FileManager.default.fileExists(atPath: file.path))
     }
 
+    @Test func keywordsComeWithTheirTranscriptAndAreCached() async throws {
+        struct Scripted: Transcriber {
+            var id: String { "scripted" }
+            func transcribe(url: URL, locale: Locale, range: ClosedRange<Double>?) async throws -> Transcript {
+                Transcript(locale: locale.identifier, engine: id, words: [
+                    TranscriptWord(text: "um", start: 0.5, end: 0.6), TranscriptWord(text: "camera", start: 0.6, end: 1.0),
+                    TranscriptWord(text: "300", start: 1.5, end: 1.9),
+                ])
+            }
+        }
+        let wav = try Self.syntheticSpeechWAV()
+        let dir = TestMedia.tempURL("cache")
+        defer { try? FileManager.default.removeItem(at: wav); try? FileManager.default.removeItem(at: dir) }
+        let asset = try await MediaProbe.makeAsset(wav)
+        let cache = CountingCache(directory: dir)
+        let pipeline = AnalysisPipeline(cache: cache, options: AnalysisOptions(transcriber: Scripted()))
+
+        let first = try await pipeline.analyze(asset, kinds: [.keywords])
+        #expect(first.transcript?.words.count == 3 && first.speech != nil)
+        let tags = try #require(first.keywords?.tags)
+        #expect(tags.map(\.word) == [1, 2])
+        #expect(tags.map(\.kind) == [.noun, .number])
+        #expect(tags.first?.emoji == "📷")
+        #expect(cache.stores.withLock { $0 } == 3)                 // speech, transcript, keywords
+
+        let second = try await pipeline.analyze(asset, kinds: [.keywords])
+        #expect(second == first)
+        #expect(cache.stores.withLock { $0 } == 3)
+        #expect(AnalysisPipeline.analyzerID(.keywords, options: AnalysisOptions(transcriber: Scripted()))
+            == "keywords.transcript.scripted.en-US.t\(AnalysisPipeline.version(of: .transcript))")
+    }
+
     @Test func versionMismatchIsAMiss() async throws {
         let dir = TestMedia.tempURL("cache")
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -337,7 +369,7 @@ private final class CountingCache: AnalysisCache {
         let audio = MediaInfo(kind: .audio, duration: RationalTime(seconds: 1), audioChannels: 2, audioSampleRate: 48_000)
         let silentVideo = MediaInfo(kind: .video, duration: RationalTime(seconds: 1), naturalWidth: 10, naturalHeight: 10)
         let all = Set(AnalysisKind.allCases)
-        #expect(AnalysisPipeline.applicableKinds(all, for: audio) == [.speech, .transcript, .loudness, .beats, .events])
+        #expect(AnalysisPipeline.applicableKinds(all, for: audio) == [.speech, .transcript, .loudness, .beats, .events, .keywords])
         #expect(AnalysisPipeline.applicableKinds(all, for: silentVideo) == [.faces, .visual])
     }
 
