@@ -370,7 +370,7 @@ private final class CountingCache: AnalysisCache {
         let silentVideo = MediaInfo(kind: .video, duration: RationalTime(seconds: 1), naturalWidth: 10, naturalHeight: 10)
         let all = Set(AnalysisKind.allCases)
         #expect(AnalysisPipeline.applicableKinds(all, for: audio) == [.speech, .transcript, .loudness, .beats, .events, .keywords])
-        #expect(AnalysisPipeline.applicableKinds(all, for: silentVideo) == [.faces, .visual])
+        #expect(AnalysisPipeline.applicableKinds(all, for: silentVideo) == [.faces, .visual, .color])
     }
 
     @Test func noAudioAssetSkipsAudioKinds() async throws {
@@ -381,7 +381,7 @@ private final class CountingCache: AnalysisCache {
             .analyze(asset, kinds: Set(AnalysisKind.allCases))
         #expect(a.transcript == nil && a.speech == nil && a.loudness == nil && a.beats == nil && a.events == nil)
         #expect(a.faces == FaceTrack(samples: []))
-        #expect(a.visual != nil)
+        #expect(a.visual != nil && a.color != nil)
         #expect(fake.calls.withLock { $0 } == 0)
     }
 

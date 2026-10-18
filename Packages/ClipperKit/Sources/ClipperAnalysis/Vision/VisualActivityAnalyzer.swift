@@ -35,6 +35,8 @@ public enum VisualAnalysisError: Error, Sendable, CustomStringConvertible {
 ///   (±interval/2 accuracy).
 /// - `salient`: Vision attention-based saliency; the union of its salient objects (top-left origin, normalized to
 ///   the display-oriented frame), nil when Vision finds none.
+/// - `sharpness`, `luma` and the clip's `ColorStats` come from the same sampled image at its sampled size (see
+///   `FrameMeasure`), so they add no decode.
 /// - Still images (`kind == .image`) yield one sample at t = 0 (EXIF orientation applied).
 public struct VisualActivityAnalyzer: Sendable {
     public var interval: Double = 1.0
@@ -57,13 +59,13 @@ public struct VisualActivityAnalyzer: Sendable {
 
     /// - Parameter progress: fraction 0…1 of the samples produced so far.
     public func analyze(url: URL, info: MediaInfo, range: ClosedRange<Double>? = nil,
-                        progress: (@Sendable (Double) -> Void)? = nil) async throws -> VisualActivity {
+                        progress: (@Sendable (Double) -> Void)? = nil) async throws -> (activity: VisualActivity, color: ColorStats) {
         if info.kind == .image { return try await analyzeImage(url: url, progress: progress) }
         return try await offCooperativePool { try await analyzeVideo(url: url, info: info, range: range, progress: progress) }
     }
 
     private func analyzeVideo(url: URL, info: MediaInfo, range: ClosedRange<Double>?,
-                              progress: (@Sendable (Double) -> Void)?) async throws -> VisualActivity {
+                              progress: (@Sendable (Double) -> Void)?) async throws -> (activity: VisualActivity, color: ColorStats) {
         let asset = AVURLAsset(url: url)
         guard try await !asset.loadTracks(withMediaType: .video).isEmpty else { throw VisualAnalysisError.noVideoTrack(url) }
         var duration = info.duration.seconds
@@ -104,27 +106,33 @@ public struct VisualActivityAnalyzer: Sendable {
         return times
     }
 
-    /// Stitches segments (the first sample of each is compared with the last of the one before) and finds the cuts.
-    func assemble(_ segments: [Segment], url: URL, progress: (@Sendable (Double) -> Void)?) throws -> VisualActivity {
+    /// Stitches segments (the first sample of each is compared with the last of the one before), finds the cuts and
+    /// takes the per-frame colour medians.
+    func assemble(_ segments: [Segment], url: URL,
+                  progress: (@Sendable (Double) -> Void)?) throws -> (activity: VisualActivity, color: ColorStats) {
         var samples: [VisualSample] = []
+        var frames: [FrameMeasure] = []
         var previous: Signature?
         var firstError: String?
         for segment in segments {
             firstError = firstError ?? segment.error
-            for (k, var sample) in segment.samples.enumerated() {
+            for (k, (var sample, frame)) in zip(segment.samples, segment.frames).enumerated() {
                 if let last = samples.last, sample.time <= last.time + 1e-3 { continue }
                 if k == 0 { sample.change = previous.map { Self.change($0, segment.first!) } ?? 0 }
                 samples.append(sample)
+                frames.append(frame)
             }
             if let last = segment.last { previous = last }
         }
-        if samples.isEmpty, let firstError { throw VisualAnalysisError.cannotRead(url, firstError) }
+        if samples.isEmpty { throw VisualAnalysisError.cannotRead(url, firstError ?? "no frames") }
         progress?(1)
-        return VisualActivity(samples: samples, sceneCuts: sceneCuts(samples))
+        return (VisualActivity(samples: samples, sceneCuts: sceneCuts(samples)), FrameMeasure.median(frames))
     }
 
     struct Segment: Sendable {
         var samples: [VisualSample] = []
+        /// Parallel to `samples`.
+        var frames: [FrameMeasure] = []
         var first: Signature?
         var last: Signature?
         var error: String?
@@ -141,14 +149,16 @@ public struct VisualActivityAnalyzer: Sendable {
 
         mutating func add(_ image: CGImage, at time: Double) async throws {
             if let last = segment.samples.last, time <= last.time + 1e-3 { return }   // same frame again
-            guard let signature = Signature(image) else { return }
+            guard let signature = Signature(image), let frame = FrameMeasure(image) else { return }
             var salient: NormRect?
             if saliency {
                 let observation = try await request.perform(on: image)
                 salient = VisualActivityAnalyzer.union(observation.salientObjects.map(\.boundingBox.cgRect))
             }
             let change = segment.last.map { VisualActivityAnalyzer.change($0, signature) } ?? 0
-            segment.samples.append(VisualSample(time: time, change: change, salient: salient))
+            segment.samples.append(VisualSample(time: time, change: change, salient: salient, sharpness: frame.sharpness,
+                                                luma: frame.luma))
+            segment.frames.append(frame)
             if segment.first == nil { segment.first = signature }
             segment.last = signature
         }
@@ -174,7 +184,8 @@ public struct VisualActivityAnalyzer: Sendable {
         return builder.segment
     }
 
-    private func analyzeImage(url: URL, progress: (@Sendable (Double) -> Void)?) async throws -> VisualActivity {
+    private func analyzeImage(url: URL,
+                              progress: (@Sendable (Double) -> Void)?) async throws -> (activity: VisualActivity, color: ColorStats) {
         guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
               let image = CGImageSourceCreateThumbnailAtIndex(src, 0, [
                   kCGImageSourceCreateThumbnailFromImageAlways: true,
@@ -183,13 +194,15 @@ public struct VisualActivityAnalyzer: Sendable {
               ] as CFDictionary) else {
             throw VisualAnalysisError.cannotRead(url, "unreadable image")
         }
+        guard let frame = FrameMeasure(image) else { throw VisualAnalysisError.cannotRead(url, "unreadable image") }
         var salient: NormRect?
         if saliency {
             let observation = try await GenerateAttentionBasedSaliencyImageRequest().perform(on: image)
             salient = Self.union(observation.salientObjects.map(\.boundingBox.cgRect))
         }
         progress?(1)
-        return VisualActivity(samples: [VisualSample(time: 0, change: 0, salient: salient)], sceneCuts: [])
+        let sample = VisualSample(time: 0, change: 0, salient: salient, sharpness: frame.sharpness, luma: frame.luma)
+        return (VisualActivity(samples: [sample], sceneCuts: []), FrameMeasure.median([frame]))
     }
 
     /// The generator configuration used for sampling (exposed for tests).
@@ -209,6 +222,87 @@ public struct VisualActivityAnalyzer: Sendable {
         for r in rects.dropFirst() { u = u.union(r) }
         let rect = FaceAnalyzer.topLeftRect(u)
         return rect.width > 0 && rect.height > 0 ? rect : nil
+    }
+
+    // MARK: - Exposure, colour and sharpness
+
+    /// What one sampled frame contributes to `VisualSample.sharpness`/`luma` and the clip's `ColorStats`, measured on
+    /// its sRGB pixels at the sampled size.
+    struct FrameMeasure: Sendable, Equatable {
+        var luma: Double, p01: Double, p99: Double, saturation: Double
+        var r: Double, g: Double, b: Double
+        var sharpness: Double
+
+        /// `VisualSample.sharpness` = v / (v + sharpnessReference) for a Laplacian variance v in 8-bit units².
+        static let sharpnessReference = 500.0
+
+        init?(_ image: CGImage) {
+            let w = image.width, h = image.height
+            guard w > 0, h > 0 else { return nil }
+            var rgba = [UInt8](repeating: 0, count: w * h * 4)
+            let ok = rgba.withUnsafeMutableBytes { buf -> Bool in
+                guard let space = CGColorSpace(name: CGColorSpace.sRGB),
+                      let ctx = CGContext(data: buf.baseAddress, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+                                          space: space, bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { return false }
+                ctx.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
+                return true
+            }
+            guard ok else { return nil }
+            self.init(rgba: rgba, width: w, height: h)
+        }
+
+        init(rgba: [UInt8], width w: Int, height h: Int) {
+            let n = w * h
+            var y = [Float](repeating: 0, count: n)
+            var histogram = [Int](repeating: 0, count: 256)
+            var sumR = 0, sumG = 0, sumB = 0, sumChroma = 0
+            var sumY: Float = 0
+            for i in 0..<n {
+                let r = rgba[4 * i], g = rgba[4 * i + 1], b = rgba[4 * i + 2]
+                let l = 0.2126 * Float(r) + 0.7152 * Float(g) + 0.0722 * Float(b)
+                y[i] = l
+                sumY += l
+                histogram[min(255, Int(l.rounded()))] += 1
+                sumR += Int(r); sumG += Int(g); sumB += Int(b)
+                sumChroma += Int(max(r, g, b) - min(r, g, b))
+            }
+            var count = 0.0, sum = 0.0, sq = 0.0
+            if w >= 3 && h >= 3 {
+                for row in 1..<(h - 1) {
+                    for col in 1..<(w - 1) {
+                        let i = row * w + col
+                        let lap = Double(4 * y[i] - y[i - 1] - y[i + 1] - y[i - w] - y[i + w])
+                        count += 1; sum += lap; sq += lap * lap
+                    }
+                }
+            }
+            let variance = count > 0 ? max(0, sq / count - (sum / count) * (sum / count)) : 0
+            func percentile(_ p: Double) -> Double {
+                var seen = 0
+                for (level, k) in histogram.enumerated() {
+                    seen += k
+                    if Double(seen) >= p * Double(n) { return Double(level) / 255 }
+                }
+                return 1
+            }
+            let total = Double(max(1, n)) * 255
+            luma = Double(sumY) / total
+            p01 = percentile(0.01); p99 = percentile(0.99)
+            saturation = Double(sumChroma) / total
+            r = Double(sumR) / total; g = Double(sumG) / total; b = Double(sumB) / total
+            sharpness = variance / (variance + Self.sharpnessReference)
+        }
+
+        /// Per-field medians; a scene that changes mid-clip does not drag the clip's statistics the way a mean would.
+        static func median(_ frames: [FrameMeasure]) -> ColorStats {
+            func m(_ field: KeyPath<FrameMeasure, Double>) -> Double {
+                let v = frames.map { $0[keyPath: field] }.sorted()
+                guard !v.isEmpty else { return 0 }
+                return v.count % 2 == 1 ? v[v.count / 2] : (v[v.count / 2 - 1] + v[v.count / 2]) / 2
+            }
+            return ColorStats(luma: m(\.luma), p01: m(\.p01), p99: m(\.p99), saturation: m(\.saturation),
+                              r: m(\.r), g: m(\.g), b: m(\.b))
+        }
     }
 
     // MARK: - Change and cuts

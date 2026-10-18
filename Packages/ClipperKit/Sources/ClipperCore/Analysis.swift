@@ -4,7 +4,7 @@ import Foundation
 // Times are in seconds of *source* media: analysis is per asset, independent of any timeline.
 
 public enum AnalysisKind: String, Sendable, CaseIterable, Codable {
-    case speech, transcript, loudness, faces, beats, events, visual, keywords
+    case speech, transcript, loudness, faces, beats, events, visual, color, keywords
 }
 
 public struct TranscriptWord: Codable, Sendable, Equatable {
@@ -156,7 +156,16 @@ public struct VisualSample: Codable, Sendable, Equatable {
     public var change: Double
     /// Most salient region (display-oriented, normalized, origin top-left), if any.
     public var salient: NormRect?
-    public init(time: Double, change: Double, salient: NormRect?) { self.time = time; self.change = change; self.salient = salient }
+    /// Detail in the sampled frame (longest side 256 px), 0…1: v / (v + 500), where v is the variance of the 3×3
+    /// Laplacian of its 8-bit luma. The fixed reference makes values comparable across clips sampled at that size:
+    /// the testsrc2 fixture measures v ≈ 830 (0.62), blurred by σ = 4 px at 1080p ≈ 320 (0.39), by σ = 12 px ≈ 36
+    /// (0.07). Nil in artifacts that predate it.
+    public var sharpness: Double?
+    /// Mean Rec. 709 luma of the display-referred frame, 0…1.
+    public var luma: Double?
+    public init(time: Double, change: Double, salient: NormRect?, sharpness: Double? = nil, luma: Double? = nil) {
+        self.time = time; self.change = change; self.salient = salient; self.sharpness = sharpness; self.luma = luma
+    }
 }
 
 public struct VisualActivity: Codable, Sendable, Equatable {
@@ -164,6 +173,25 @@ public struct VisualActivity: Codable, Sendable, Equatable {
     /// Times of hard cuts / scene changes.
     public var sceneCuts: [Double]
     public init(samples: [VisualSample], sceneCuts: [Double]) { self.samples = samples; self.sceneCuts = sceneCuts }
+}
+
+/// Exposure and colour balance of a clip: medians over the frames `.visual` samples, display-referred (Rec. 709
+/// R′G′B′ as shown), all 0…1.
+public struct ColorStats: Codable, Sendable, Equatable {
+    /// Mean luma.
+    public var luma: Double
+    /// 1st and 99th percentile luma: the frame's black and white points.
+    public var p01: Double
+    public var p99: Double
+    /// Mean chroma, max(R′, G′, B′) − min(R′, G′, B′).
+    public var saturation: Double
+    /// Mean of each channel (grey world: equal means read as a neutral white balance).
+    public var r: Double
+    public var g: Double
+    public var b: Double
+    public init(luma: Double, p01: Double, p99: Double, saturation: Double, r: Double, g: Double, b: Double) {
+        self.luma = luma; self.p01 = p01; self.p99 = p99; self.saturation = saturation; self.r = r; self.g = g; self.b = b
+    }
 }
 
 /// Words worth calling out, from on-device part-of-speech and entity tagging. Indices into `Transcript.words`.
@@ -219,14 +247,15 @@ public struct AssetAnalysis: Codable, Sendable, Equatable {
     public var beats: BeatGrid?
     public var events: SoundEvents?
     public var visual: VisualActivity?
+    public var color: ColorStats?
     public var keywords: KeywordTags?
     /// Only when a local LLM ran (`TranscriptBriefer`); the analysis pipeline never sets it.
     public var brief: TranscriptBrief?
     public init(transcript: Transcript? = nil, speech: SpeechActivity? = nil, loudness: LoudnessInfo? = nil,
                 faces: FaceTrack? = nil, beats: BeatGrid? = nil, events: SoundEvents? = nil, visual: VisualActivity? = nil,
-                keywords: KeywordTags? = nil, brief: TranscriptBrief? = nil) {
+                color: ColorStats? = nil, keywords: KeywordTags? = nil, brief: TranscriptBrief? = nil) {
         self.transcript = transcript; self.speech = speech; self.loudness = loudness; self.faces = faces; self.beats = beats
-        self.events = events; self.visual = visual; self.keywords = keywords; self.brief = brief
+        self.events = events; self.visual = visual; self.color = color; self.keywords = keywords; self.brief = brief
     }
 }
 

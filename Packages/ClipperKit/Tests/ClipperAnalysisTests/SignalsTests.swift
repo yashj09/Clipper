@@ -263,6 +263,36 @@ private final class CountingCache: AnalysisCache {
         #expect(VisualActivityAnalyzer().sceneCuts(still).isEmpty)
     }
 
+    @Test func frameMeasureReadsExposureColourAndDetail() {
+        let w = 64, h = 36
+        func frame(_ pixel: (Int, Int) -> (UInt8, UInt8, UInt8)) -> VisualActivityAnalyzer.FrameMeasure {
+            var rgba = [UInt8](repeating: 255, count: w * h * 4)
+            for y in 0..<h { for x in 0..<w { let (r, g, b) = pixel(x, y); let i = 4 * (y * w + x); rgba[i] = r; rgba[i + 1] = g; rgba[i + 2] = b } }
+            return VisualActivityAnalyzer.FrameMeasure(rgba: rgba, width: w, height: h)
+        }
+        let grey = frame { _, _ in (128, 128, 128) }
+        #expect(abs(grey.luma - 128 / 255) < 1e-3 && grey.p01 == grey.p99 && grey.sharpness == 0 && grey.saturation == 0)
+        #expect(grey.r == grey.g && grey.g == grey.b)
+
+        let red = frame { _, _ in (255, 0, 0) }
+        #expect(red.r == 1 && red.g == 0 && red.b == 0 && red.saturation == 1 && abs(red.luma - 0.2126) < 1e-3)
+
+        let checker = frame { x, y in (x + y) % 2 == 0 ? (0, 0, 0) : (255, 255, 255) }
+        let ramp = frame { x, _ in let v = UInt8(x * 4); return (v, v, v) }
+        #expect(checker.sharpness > 0.99 && ramp.sharpness < 0.05)
+        #expect(checker.p01 == 0 && checker.p99 == 1)
+
+        let stats = VisualActivityAnalyzer.FrameMeasure.median([grey, red, checker])
+        #expect(stats.r == 128 / 255 && stats.saturation == 0)
+    }
+
+    @Test func samplesFromBeforeSharpnessStillDecode() throws {
+        let v1 = Data(#"{"samples":[{"time":1,"change":0.2}],"sceneCuts":[]}"#.utf8)
+        let activity = try CacheCodec.decoder.decode(VisualActivity.self, from: v1)
+        #expect(activity.samples == [VisualSample(time: 1, change: 0.2, salient: nil)])
+        #expect(activity.samples[0].sharpness == nil && activity.samples[0].luma == nil)
+    }
+
     @Test func unionOfSalientObjects() throws {
         // Vision rects have a lower-left origin; the union is returned top-left.
         let r = try #require(VisualActivityAnalyzer.union([CGRect(x: 0.1, y: 0.5, width: 0.2, height: 0.2),
@@ -289,7 +319,7 @@ private final class CountingCache: AnalysisCache {
         #expect(CGImageDestinationFinalize(dest))
 
         let info = MediaInfo(kind: .image, duration: .zero, naturalWidth: w, naturalHeight: h)
-        let activity = try await VisualActivityAnalyzer().analyze(url: url, info: info)
+        let activity = try await VisualActivityAnalyzer().analyze(url: url, info: info).activity
         #expect(activity.samples.count == 1 && activity.samples[0].time == 0 && activity.sceneCuts.isEmpty)
         let r = try #require(activity.samples[0].salient)
         print("still image salient: \(r)")
@@ -304,7 +334,7 @@ private final class CountingCache: AnalysisCache {
                                                      try #require(SignalMedia.fixture("overlay_1280x720_30.mov")), to: out)
         let info = try await MediaProbe.probe(out)
         let progress = Mutex(0.0)
-        let activity = try await VisualActivityAnalyzer().analyze(url: out, info: info) { p in progress.withLock { $0 = max($0, p) } }
+        let activity = try await VisualActivityAnalyzer().analyze(url: out, info: info) { p in progress.withLock { $0 = max($0, p) } }.activity
         print(String(format: "concat (join %.2f s): cuts %@; changes %@", join, activity.sceneCuts.map { String(format: "%.2f", $0) },
                      activity.samples.map { String(format: "%.2f", $0.change) }.joined(separator: " ")))
         #expect(activity.samples.count >= 18)
@@ -338,9 +368,10 @@ private final class CountingCache: AnalysisCache {
         let m = 4
         #expect(isRed(w - m, m) && !isRed(m, m) && !isRed(m, h - m) && !isRed(w - m, h - m))
 
-        let activity = try await VisualActivityAnalyzer().analyze(url: url, info: info)
+        let activity = try await VisualActivityAnalyzer().analyze(url: url, info: info).activity
         print("rotated_marker salient: \(activity.samples.map { $0.salient.map { String(format: "(%.2f, %.2f, %.2f×%.2f)", $0.x, $0.y, $0.width, $0.height) } ?? "nil" })")
         #expect(activity.samples.count == 3)
+        #expect(activity.samples.allSatisfy { ($0.sharpness ?? -1) >= 0 && ($0.sharpness ?? 2) <= 1 && ($0.luma ?? -1) > 0 })
         #expect(activity.sceneCuts.isEmpty)
         let salient = activity.samples.compactMap(\.salient)
         #expect(!salient.isEmpty)
@@ -354,7 +385,7 @@ private final class CountingCache: AnalysisCache {
         let info = try await MediaProbe.probe(url)
         let duration = info.duration.seconds
         let clock = ContinuousClock(), t0 = clock.now
-        let activity = try await VisualActivityAnalyzer().analyze(url: url, info: info)
+        let activity = try await VisualActivityAnalyzer().analyze(url: url, info: info).activity
         let elapsed = elapsedSeconds(clock.now - t0)
         let salient = activity.samples.filter { $0.salient != nil }.count
         print(String(format: "visual: %.0f s at 1/s → %d samples (%d salient), %d cuts in %.1f s; 2 h ≈ %.0f s",
@@ -404,6 +435,35 @@ private final class CountingCache: AnalysisCache {
         #expect(AnalysisPipeline.analyzerID(.visual, options: AnalysisOptions()) == "visual.1s.t0.5.px256.cut0.3-3-30.sal")
     }
 
+    /// Colour on its own runs a pass without saliency; asking for visual later reuses the cached colour, and both
+    /// passes measure the same frames.
+    @Test(.enabled(if: SignalMedia.has("bg_1080x1920_60.mov"), "Fixtures/bg_1080x1920_60.mov not present"))
+    func colorSharesTheVisualPass() async throws {
+        let url = try #require(SignalMedia.fixture("bg_1080x1920_60.mov"))
+        let asset = try await MediaProbe.makeAsset(url)
+        let dir = SignalMedia.tempURL("cache")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let cache = CountingCache(directory: dir)
+        let pipeline = AnalysisPipeline(cache: cache)
+
+        let colorOnly = try await pipeline.analyze(asset, kinds: [.color])
+        let color = try #require(colorOnly.color)
+        print("bg color: \(color)")
+        #expect(colorOnly.visual == nil)
+        #expect(cache.stores.withLock { $0 } == 1)
+        #expect(color.p01 <= color.luma && color.luma <= color.p99 && color.saturation > 0)
+
+        let both = try await pipeline.analyze(asset, kinds: [.visual, .color])
+        #expect(both.color == color)
+        #expect(cache.hits.withLock { $0 } == 1 && cache.stores.withLock { $0 } == 2)
+        let visual = try #require(both.visual)
+        #expect(visual.samples.allSatisfy { $0.sharpness != nil && $0.luma != nil })
+
+        let fresh = try await AnalysisPipeline(cache: nil).analyze(asset, kinds: [.visual, .color])
+        #expect(fresh.color == color && fresh.visual == visual)
+        #expect(AnalysisPipeline.analyzerID(.color, options: AnalysisOptions()) == "color.1s.t0.5.px256")
+    }
+
     @Test func applicability() {
         let audio = MediaInfo(kind: .audio, duration: RationalTime(seconds: 1), audioChannels: 2, audioSampleRate: 48_000)
         let silentVideo = MediaInfo(kind: .video, duration: RationalTime(seconds: 1), naturalWidth: 10, naturalHeight: 10)
@@ -411,6 +471,8 @@ private final class CountingCache: AnalysisCache {
         #expect(AnalysisPipeline.applicableKinds([.events, .visual], for: audio) == [.events])
         #expect(AnalysisPipeline.applicableKinds([.events, .visual], for: silentVideo) == [.visual])
         #expect(AnalysisPipeline.applicableKinds([.events, .visual], for: image) == [.visual])
+        #expect(AnalysisPipeline.applicableKinds([.color], for: image) == [.color])
+        #expect(AnalysisPipeline.applicableKinds([.color], for: audio).isEmpty)
         #expect(AnalysisKind(rawValue: "events") == .events && AnalysisKind(rawValue: "visual") == .visual)
     }
 }

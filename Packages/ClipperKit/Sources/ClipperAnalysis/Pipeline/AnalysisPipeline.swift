@@ -39,11 +39,13 @@ public enum AnalysisPipelineError: Error, Sendable, CustomStringConvertible {
 ///   Analyzer IDs include whatever changes the output (transcriber engine + locale, face sampling rate).
 ///   Cache write failures are ignored (the result is still returned; it will simply be recomputed next time).
 /// - Applicability: kinds that don't apply are skipped, not errors. No audio track → no speech/transcript/loudness/
-///   events; `faces` and `visual` need a video or image; `beats` only runs for audio-only (music) assets.
+///   events; `faces`, `visual` and `color` need a video or image; `beats` only runs for audio-only (music) assets.
 ///   Requesting `transcript` also computes (and returns) `speech`, which the snapper needs. Requesting `keywords`
 ///   also returns the transcript they were tagged from; tagging runs on the snapped, filler-marked transcript.
 /// - Concurrency: up to `maxConcurrent` assets are analyzed at once (further calls wait for a slot, FIFO).
 ///   Within one asset the independent analyzers run in parallel (audio decode, ANE transcription, video decode).
+///   `visual` and `color` come from one `VisualActivityAnalyzer` pass (they measure the same sampled frames); when
+///   only `color` is missing, that pass skips saliency.
 /// - Errors/cancellation: an analyzer failure does not stop the others; successes are cached and the call throws
 ///   `AnalysisPipelineError.analyzersFailed` carrying the partial result. Cancelling the calling task cancels all
 ///   analyzers and throws `CancellationError`.
@@ -107,7 +109,10 @@ public actor AnalysisPipeline {
         case .events:
             KindSpec(version: 1, applies: \.hasAudio, id: { "events.\(eventsSignature($0.events))" }, output: Output.events)
         case .visual:
-            KindSpec(version: 1, applies: \.hasVideo, id: { "visual.\(visualSignature($0.visual))" }, output: Output.visual)
+            // 2: samples carry sharpness and luma
+            KindSpec(version: 2, applies: \.hasVideo, id: { "visual.\(visualSignature($0.visual))" }, output: Output.visual)
+        case .color:
+            KindSpec(version: 1, applies: \.hasVideo, id: { "color.\(colorSignature($0.visual))" }, output: Output.color)
         case .keywords:
             // Tags index transcript words, so they are only valid for the transcript they were made from.
             KindSpec(version: 1, applies: \.hasAudio,
@@ -128,6 +133,11 @@ public actor AnalysisPipeline {
     static func visualSignature(_ v: VisualActivityAnalyzer) -> String {
         String(format: "%gs.t%g.px%g.cut%g-%g-%d", v.interval, v.tolerance, v.maximumSize, v.minCutChange, v.cutSigma,
                v.cutWindow) + (v.saliency ? ".sal" : "")
+    }
+
+    /// Everything that changes the `ColorStats` a `VisualActivityAnalyzer` measures: which frames it samples, at what size.
+    static func colorSignature(_ v: VisualActivityAnalyzer) -> String {
+        String(format: "%gs.t%g.px%g", v.interval, v.tolerance, v.maximumSize)
     }
 
     /// Runs the requested analyzers for an asset, reusing cached results (keyed by asset.key + analyzer id + version),
@@ -162,6 +172,7 @@ public actor AnalysisPipeline {
         case beats(BeatGrid)
         case events(SoundEvents)
         case visual(VisualActivity)
+        case color(ColorStats)
         case keywords(KeywordTags)
     }
 
@@ -188,6 +199,7 @@ public actor AnalysisPipeline {
         }
         let tagKeywords = misses.remove(.keywords) != nil
         let shared = sharedAudioKinds(misses, options: options)
+        let visual = misses.intersection([.visual, .color])
 
         let computed = await withTaskGroup(of: [(AnalysisKind, Result<Output, Error>)].self,
                                            returning: [(AnalysisKind, Result<Output, Error>)].self) { group in
@@ -196,7 +208,13 @@ public actor AnalysisPipeline {
                     await ingestAudio(shared, url: url, info: info, key: key, cache: cache, options: options, progress: progress)
                 }
             }
-            for kind in misses.subtracting(shared) {
+            if !visual.isEmpty {
+                group.addTask(executorPreference: DecodeExecutor.shared) {
+                    await measureVisual(visual, url: url, info: info, key: key, cache: cache, options: options,
+                                        progress: progress)
+                }
+            }
+            for kind in misses.subtracting(shared).subtracting(visual) {
                 group.addTask(executorPreference: DecodeExecutor.shared) {
                     [(kind, await compute(kind, url: url, info: info, key: key, cache: cache, options: options,
                                           progress: progress))]
@@ -221,6 +239,7 @@ public actor AnalysisPipeline {
             case .success(.beats(let b)): analysis.beats = b
             case .success(.events(let e)): analysis.events = e
             case .success(.visual(let v)): analysis.visual = v
+            case .success(.color(let c)): analysis.color = c
             case .success(.keywords(let k)): analysis.keywords = k
             case .failure(let error):
                 if error is CancellationError { throw error }
@@ -279,12 +298,8 @@ public actor AnalysisPipeline {
                     try await options.events.analyze(url: url, range: nil, progress: report)
                 }
                 return .success(.events(e))
-            case .visual:
-                let report: (@Sendable (Double) -> Void)? = progress.map { p in { @Sendable f in p(.visual, f) } }
-                let v: VisualActivity = try await computed(kind, id, key, cache, progress) {
-                    try await options.visual.analyze(url: url, info: info, range: nil, progress: report)
-                }
-                return .success(.visual(v))
+            case .visual, .color:
+                preconditionFailure("visual and color are measured together in measureVisual(), never computed here")
             case .keywords:
                 preconditionFailure("keywords are tagged from the final transcript in run(), never computed here")
             }
@@ -318,6 +333,34 @@ public actor AnalysisPipeline {
                                             _ cache: (any AnalysisCache)?) async {
         if let cache, let data = try? CacheCodec.encoder.encode(value) {
             try? await cache.store(data, key: key, analyzer: analyzer, version: version(of: kind))
+        }
+    }
+
+    /// One `VisualActivityAnalyzer` pass for the missed `kinds` (a non-empty subset of `.visual` and `.color`).
+    private static func measureVisual(_ kinds: Set<AnalysisKind>, url: URL, info: MediaInfo, key: AssetKey,
+                                      cache: (any AnalysisCache)?, options: AnalysisOptions,
+                                      progress: Progress?) async -> [(AnalysisKind, Result<Output, Error>)] {
+        var analyzer = options.visual
+        if !kinds.contains(.visual) { analyzer.saliency = false }
+        for kind in kinds { progress?(kind, 0) }
+        let report: (@Sendable (Double) -> Void)? = progress.map { p in { @Sendable f in for kind in kinds { p(kind, f) } } }
+        do {
+            try Task.checkCancellation()
+            let (activity, color) = try await analyzer.analyze(url: url, info: info, range: nil, progress: report)
+            try Task.checkCancellation()
+            var out: [(AnalysisKind, Result<Output, Error>)] = []
+            if kinds.contains(.visual) {
+                await store(activity, .visual, analyzerID(.visual, options: options), key, cache)
+                out.append((.visual, .success(.visual(activity))))
+            }
+            if kinds.contains(.color) {
+                await store(color, .color, analyzerID(.color, options: options), key, cache)
+                out.append((.color, .success(.color(color))))
+            }
+            for kind in kinds { progress?(kind, 1) }
+            return out
+        } catch {
+            return kinds.map { ($0, .failure(error)) }
         }
     }
 
