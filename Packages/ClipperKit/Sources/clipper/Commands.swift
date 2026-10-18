@@ -114,13 +114,12 @@ struct Analyze: AsyncParsableCommand {
     static let configuration = CommandConfiguration(abstract: "Analyze library media (results are cached by content).")
     @OptionGroup var lib: LibraryOptions
     @Argument(help: "Asset names or id prefixes (default: all).") var assets: [String] = []
-    @Option(help: "Comma-separated: speech,transcript,loudness,faces,beats,events,visual,keywords") var kinds = "speech,transcript,faces,keywords"
+    @Option(help: "Comma-separated: speech,transcript,loudness,faces,beats,events,visual,color,keywords") var kinds = "speech,transcript,faces,keywords"
     @Flag(help: "Print transcripts.") var transcript = false
 
     func run() async throws {
         let s = try Services(lib)
-        let all = try s.library.assets().filter { !$0.tags.contains("music") }
-        let selected = assets.isEmpty ? all : all.filter { a in assets.contains { a.name.localizedCaseInsensitiveContains($0) || a.id.uuidString.lowercased().hasPrefix($0.lowercased()) } }
+        let selected = try s.assets(matching: assets).filter { !$0.tags.contains("music") }
         let k = Set(kinds.split(separator: ",").compactMap { AnalysisKind(rawValue: String($0)) })
         let results = try await s.analyze(selected, kinds: k)
         if transcript {

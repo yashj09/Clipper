@@ -95,7 +95,9 @@ Ingest → probe → mezzanine/proxy → analysis jobs (transcript, speechActivi
 1. **Analysis.** `AnalysisPipeline` runs these kinds:
    - `speech` + `transcript`: streaming SpeechTranscriber. Word edges are snapped to voice activity.
    - `events`: SoundAnalysis classifier v1. Laughter, applause, cheering, shouting, crowd, booing and gasp labels are merged into events.
-   - `visual`: about 1 sample per second from keyframe-near frames (AVAssetImageGenerator with tolerance, 256 px). Measures colour-histogram plus pixel change, adaptive scene cuts, and a Vision attention-saliency box.
+   - `visual`: about 1 sample per second from keyframe-near frames (AVAssetImageGenerator with tolerance, 256 px). Measures colour-histogram plus pixel change, adaptive scene cuts, a Vision attention-saliency box, and each frame's sharpness (Laplacian variance against a fixed reference) and mean luma.
+   - `color`: per-clip medians of luma, 1st/99th percentile luma, mean chroma and grey-world channel means, from the same sampled frames. The pipeline computes `visual` and `color` in one pass; `color` alone skips saliency. `ColorAdjust.suggested(for:look:)` (Core, pure) turns the stats into a starting grade.
+   - Outside the pipeline, `CoverFramePicker` ranks the `visual` samples (sharpness, a face from `faces`, exposure, saliency size; 2 s apart, away from the ends), then re-ranks the best with Vision face capture quality on full-resolution frames. `clipper cover` writes the winners as JPEG.
    - `keywords` (`KeywordTagger`): NaturalLanguage part-of-speech, name and lemma tags on the final transcript mark numbers, names, content nouns and shouted words, each with an emoji from `KeywordEmoji.table` when one fits.
    - Outside the pipeline, `TranscriptBriefer` asks the local LLM (`LocalLLM`, the same localhost-only client as the ranker) for a title, hook sentence, per-sentence importance, chapters, description and hashtags. Transcripts over 1500 words are split into parts and the answers combined. `clipper draft --llm` and the app's draft (when the local LLM is on in Settings) use its title when none is given.
 

@@ -35,6 +35,15 @@ struct Services {
         return out
     }
 
+    /// Assets whose name contains, or whose id starts with, any of `queries`; all assets when there are none.
+    func assets(matching queries: [String]) throws -> [MediaAsset] {
+        let all = try library.assets()
+        guard !queries.isEmpty else { return all }
+        return all.filter { a in
+            queries.contains { a.name.localizedCaseInsensitiveContains($0) || a.id.uuidString.lowercased().hasPrefix($0.lowercased()) }
+        }
+    }
+
     func assetMap() throws -> [AssetID: MediaAsset] {
         Dictionary(uniqueKeysWithValues: try library.assets().map { ($0.id, $0) })
     }
@@ -61,6 +70,7 @@ struct Services {
             if let e = a.events { parts.append("\(e.events.count) sound events") }
             if let v = a.visual { parts.append("\(v.samples.count) visual samples, \(v.sceneCuts.count) cuts") }
             Console.line(String(format: "  ✓ %@ (%@) %.1fs", asset.name, parts.joined(separator: ", "), (ContinuousClock.now - start).seconds))
+            if let c = a.color { Console.line("    " + Self.describe(c)) }
         }
         return result
     }
@@ -94,6 +104,21 @@ struct Services {
                 Console.line("⚠️ Brief of \(asset.name) failed: \(error)")
             }
         }
+    }
+
+    /// "color: luma 0.41, range 0.03–0.92, chroma 0.18, warm; suggested exposure +0.08, temperature -0.12"
+    static func describe(_ c: ColorStats) -> String {
+        let warmth = c.r / max(c.b, 1e-3), green = c.g / max((c.r + c.b) / 2, 1e-3)
+        var casts: [String] = []
+        if warmth > 1.05 { casts.append("warm") } else if warmth < 0.95 { casts.append("cool") }
+        if green > 1.05 { casts.append("green") } else if green < 0.95 { casts.append("magenta") }
+        let fix = ColorAdjust.suggested(for: c)
+        let sliders: [(String, Double)] = [("exposure", fix.exposure), ("contrast", fix.contrast), ("saturation", fix.saturation),
+                                           ("temperature", fix.temperature), ("tint", fix.tint)]
+        let moves = sliders.filter { $0.1 != 0 }.map { String(format: "%@ %+.2f", $0.0, $0.1) }
+        return String(format: "color: luma %.2f, range %.2f–%.2f, chroma %.2f, %@; suggested %@", c.luma, c.p01, c.p99,
+                      c.saturation, casts.isEmpty ? "neutral" : casts.joined(separator: " "),
+                      moves.isEmpty ? "no change" : moves.joined(separator: ", "))
     }
 
     static func describe(_ brief: TranscriptBrief, transcript: Transcript) -> String {
