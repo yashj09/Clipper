@@ -296,12 +296,16 @@ enum Speech {
             return c
         }
         if let speech {
-            for i in loudWords(words, speech: speech) { cues[i].insert(.loud) }
+            // A loud "the" or "is" is delivery, not meaning; highlighting it reads as noise.
+            for i in loudWords(words, speech: speech)
+            where words[i].text.filter(\.isLetter).count >= 3 && !(english && functionWords.contains(norm(words[i].text))) {
+                cues[i].insert(.loud)
+            }
         }
         for s in sentences {
             guard let first = s.indices.first(where: { !words[$0].isFiller }) else { continue }
             if s.words.last.map({ $0.text.hasSuffix("?") }) == true { cues[first].insert(.question) }
-            if s.pauseBefore >= 0.6 { cues[first].insert(.afterPause) }
+            if s.pauseBefore.isFinite, s.pauseBefore >= 0.6 { cues[first].insert(.afterPause) }
         }
         return cues
     }

@@ -67,7 +67,10 @@ public enum DraftPipeline {
             let after = segments.reduce(0) { $0 + $1.duration }
             if rules.silenceCut != nil, before - after > 0.05 {
                 report.removedSeconds = before - after
-                report.notes.append(String(format: "Removed %.1fs of pauses and fillers (%d segments kept)", before - after, segments.count))
+                let edits = plans.values.reduce(0.0) { $0 + $1.excluded.ranges.reduce(0) { $0 + $1.upperBound - $1.lowerBound } }
+                if before - after - edits > 0.05 {
+                    report.notes.append(String(format: "Removed %.1fs of pauses and fillers (%d segments kept)", before - after - edits, segments.count))
+                }
             }
             if let maxDuration { segments = Cutting.fit(segments, maxDuration: maxDuration, report: &report) }
             if wantsMusic, let snapRule = rules.beatSnap {

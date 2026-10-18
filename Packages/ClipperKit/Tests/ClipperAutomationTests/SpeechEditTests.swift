@@ -207,6 +207,21 @@ func kept(_ plan: SpeechPlan) -> [String] { plan.words.map(\.text) }
         #expect(r.report.notes.contains { $0.hasPrefix("Added ") && $0.contains("on emphasis") })
     }
 
+    @Test func functionWordsAndClipStartsAreNotEmphasis() {
+        let line = "this whole editor runs on your machine and every cut lands where you expect it to land without any upload at all"
+        let tr = transcript([line], pauses: [])
+        let and = tr.words[7]
+        let hop = 0.01
+        let rms = (0..<3000).map { i -> Float in
+            let t = Double(i) * hop
+            return t >= and.start && t < and.end ? -20 : -30
+        }
+        let speech = SpeechActivity(spans: [], rms: Envelope(hop: hop, values: rms), noiseFloor: -60, threshold: -50)
+        let plan = SpeechPlan(clip: speakerClip(tr, seconds: 30, speech: speech), rule: SpeechEditRule())
+        #expect(!plan.words[7].cue.contains(.loud))
+        #expect(!plan.words[0].cue.contains(.afterPause))
+    }
+
     @Test func zoomCurveSpacesRampsAndAlternates() {
         let curve = Visual.zoomCurve(words: evenWords(until: 20, cue: .number), cuts: [], end: 20,
                                      rule: PunchInRule(zoom: 1.12, minSpacing: 4, rampDuration: 0.25))
