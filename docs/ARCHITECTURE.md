@@ -76,13 +76,14 @@ Ingest → probe → mezzanine/proxy → analysis jobs (transcript, speechActivi
 | 2 | SpeechPlan | Per clip, in source time: drop stutters and restarts, keep one take of a repeated line (last complete or best) and mark it, tag kept words with emphasis cues. The cutter subtracts what it excludes |
 | 3 | SilenceCut | **Snap word edges to voice activity first.** Transcriber end times run 130–500 ms early. The only voice-activity detector is the RMS envelope; noisy audio has no dedicated VAD yet, so its edges snap less accurately. Then cut gaps longer than minGap, pad 80/120 ms, and drop fillers (transcribed fillers plus voiced audio with no word). With `speedUp` (on in vlog), a cut pause up to `maxPause` (1.5 s) with no filler or edit in it is kept between the padded speech and played at `rate` (2.5x), so the footage runs on without a jump; fit drops these first and beat snapping and zoom steps leave them alone |
 | 4 | FitDuration | Drop segments until under maxDuration, never the first. With an LLM brief scoring every sentence, speech is split at sentence boundaries first and the least important sentences go (ties to the least dense); without one, the segments with the fewest words per second go. Fast pauses always go before speech. Pieces that still play straight through are joined back into one item |
-| 5 | PickMusic | Score by mood + BPM range + length fit; end on a phrase or downbeat; add CC attribution |
-| 6 | BeatSnap | Move cut points to the nearest beat (never inside speech) |
-| 7 | Captions | Group words into lines and apply a style preset |
-| 8 | PunchIns | One zoom curve over the track. Cued words zoom in or out at least minSpacing apart, stepping on a cut just before them; a slow push fills any stretch over maxStill with no cut or zoom. No move straddles a cut |
-| 9 | Reframe | Face track → spring-smoothed crop keyframes, simplified with Ramer–Douglas–Peucker |
-| 10 | Duck | Volume ramps on music under speech (−12 dB, 150 ms attack, 400 ms release) |
-| 11 | LoudnessTarget | Applied at export |
+| 5 | Hook | With `rules.hook` (on in talking head) and an LLM brief naming a hook sentence: that sentence moves to the front and plays once, followed by a 0.15 s dip to white, a "Hook" marker at 0 and a "Cold open" note. Skipped when the sentence was cut, already opens the draft, runs over `maxSeconds` (4 s), scores under `minImportance` (0.6), or shares a segment with another sentence. No brief, no cold open: there is no heuristic fallback |
+| 6 | PickMusic | Score by mood + BPM range + length fit; end on a phrase or downbeat; add CC attribution |
+| 7 | BeatSnap | Move cut points to the nearest beat (never inside speech) |
+| 8 | Captions | Group words into lines and apply a style preset |
+| 9 | PunchIns | One zoom curve over the track. Cued words zoom in or out at least minSpacing apart, stepping on a cut just before them; a slow push fills any stretch over maxStill with no cut or zoom. No move straddles a cut |
+| 10 | Reframe | Face track → spring-smoothed crop keyframes, simplified with Ramer–Douglas–Peucker |
+| 11 | Duck | Volume ramps on music under speech (−12 dB, 150 ms attack, 400 ms release) |
+| 12 | LoudnessTarget | Applied at export |
 
 ## Concurrency
 - Swift 6 strict concurrency throughout.

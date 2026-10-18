@@ -32,6 +32,7 @@ public enum DraftPipeline {
         var plans: [Int: SpeechPlan] = [:]
         var music: MusicTrack?
         var musicOffset = 0.0
+        var coldOpen: Hook.ColdOpen?
         if let beatRule = rules.beatCut {
             let total = primaryClips.reduce(0) { $0 + $1.range.upperBound - $1.range.lowerBound }
             let target = min(maxDuration ?? 30, total)
@@ -78,6 +79,11 @@ public enum DraftPipeline {
                     segments = Cutting.splitAtSentences(segments)
                 }
                 segments = Cutting.fit(segments, maxDuration: maxDuration, report: &report)
+            }
+            if let hookRule = rules.hook, let open = Hook.coldOpen(segments, clips: input.clips, rule: hookRule) {
+                segments = open.segments
+                coldOpen = open
+                report.notes.append("Cold open: “\(Hook.excerpt(open.text))”")
             }
             segments = Cutting.joinContinuous(segments)
             if wantsMusic, let snapRule = rules.beatSnap {
@@ -139,6 +145,11 @@ public enum DraftPipeline {
             primaryItems.append(item)
             previous = (seg, item.content.mediaRef!.source.end.seconds)
             cursor = end
+        }
+        // A quick flash after the cold open marks it as a deliberate jump, not a glitch in the edit.
+        if let open = coldOpen, open.count < segments.count,
+           let i = primaryItems.firstIndex(where: { segmentOf[$0.id] == segments[open.count] }) {
+            primaryItems[i].transition = Transition(.dipToWhite, duration: RationalTime.frames(0.15, rate))
         }
         let duration = cursor
         if duration == .zero { report.warnings.append("Nothing to place: add clips to the '\(primary.name)' slot") }
@@ -289,6 +300,10 @@ public enum DraftPipeline {
 
         // Drawn last so no earlier ID depends on how many retakes there were.
         timeline.markers = Speech.takeMarkers(plans, clips: input.clips, items: primaryItems, rate: rate, ids: &ids)
+        if let open = coldOpen {
+            timeline.markers.append(Marker(id: ids.uuid(), time: .zero, name: "Hook: “\(Hook.excerpt(open.text))”"))
+        }
+        timeline.markers.sort { $0.time < $1.time }
 
         // Captions above titles above everything else; audio-only tracks last.
         timeline.tracks = timeline.tracks.enumerated().sorted { a, b in

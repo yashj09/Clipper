@@ -188,6 +188,22 @@ public struct DuckRule: Codable, Sendable, Equatable {
     }
 }
 
+/// A cold open: the LLM brief's hook sentence plays first, then the draft runs from the top without it. Needs a brief;
+/// there is no heuristic fallback, since a wrong cold open is worse than none.
+public struct HookRule: Codable, Sendable, Equatable {
+    /// Longest hook, in timeline seconds, worth moving.
+    public var maxSeconds: Double
+    /// Lowest importance the brief may give the hook sentence, when it scores sentences.
+    public var minImportance: Double
+    public init(maxSeconds: Double = 4, minImportance: Double = 0.6) { self.maxSeconds = maxSeconds; self.minImportance = minImportance }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        maxSeconds = try c.decodeIfPresent(Double.self, forKey: .maxSeconds) ?? 4
+        minImportance = try c.decodeIfPresent(Double.self, forKey: .minImportance) ?? 0.6
+    }
+}
+
 public struct CaptionRule: Codable, Sendable, Equatable {
     public var style: String
     public init(style: String) { self.style = style }
@@ -207,13 +223,15 @@ public struct Rules: Codable, Sendable, Equatable {
     public var loudnessTarget: Double?
     /// Clips without speech are trimmed to at most this long (their middle), e.g. travel B-roll.
     public var maxSilentClip: Double?
+    public var hook: HookRule?
 
     public init(maxDuration: Double? = nil, speechEdits: SpeechEditRule? = nil, silenceCut: SilenceCutRule? = nil, beatCut: BeatCutRule? = nil,
                 beatSnap: BeatSnapRule? = nil, punchIn: PunchInRule? = nil, captions: CaptionRule? = nil, duck: DuckRule? = nil, loudnessTarget: Double? = -14,
-                maxSilentClip: Double? = nil) {
+                maxSilentClip: Double? = nil, hook: HookRule? = nil) {
         self.maxDuration = maxDuration; self.speechEdits = speechEdits; self.silenceCut = silenceCut; self.beatCut = beatCut; self.beatSnap = beatSnap
         self.punchIn = punchIn
         self.captions = captions; self.duck = duck; self.loudnessTarget = loudnessTarget; self.maxSilentClip = maxSilentClip
+        self.hook = hook
     }
 }
 

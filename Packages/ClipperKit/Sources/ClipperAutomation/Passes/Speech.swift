@@ -266,7 +266,9 @@ enum Speech {
             let clip = clips[i]
             for r in plan.retakes {
                 let t = r.kept.lowerBound
-                guard let item = items.first(where: { $0.content.mediaRef.map { $0.asset == clip.asset.id && $0.source.end.seconds > t } ?? false }),
+                // The earliest source, not the earliest on the timeline: a cold open plays a later line first.
+                guard let item = items.filter({ $0.content.mediaRef.map { $0.asset == clip.asset.id && $0.source.end.seconds > t } ?? false })
+                    .min(by: { $0.content.mediaRef!.source.start < $1.content.mediaRef!.source.start }),
                       let ref = item.content.mediaRef else { continue }
                 let removed = r.removed.map { "\(clock($0.lowerBound))–\(clock($0.upperBound))" }.joined(separator: ", ")
                 found.append((RationalTime.frames(item.start.seconds + max(0, t - ref.source.start.seconds), rate),

@@ -43,7 +43,7 @@ public enum BuiltIns {
         elements: [title("title-bold", seconds: 2.5)],
         rules: Rules(maxDuration: 60, speechEdits: SpeechEditRule(), silenceCut: SilenceCutRule(minGap: 0.35), beatSnap: BeatSnapRule(),
                      punchIn: PunchInRule(zoom: 1.12, minSpacing: 4),
-                     captions: CaptionRule(style: "bold-pop"), duck: DuckRule(depth: 14)),
+                     captions: CaptionRule(style: "bold-pop"), duck: DuckRule(depth: 14), hook: HookRule()),
         music: MusicPolicy(moods: ["chill", "upbeat", "inspiring"], minBPM: 80, maxBPM: 125, gain: -22))
 
     public static let gameplay = Template(

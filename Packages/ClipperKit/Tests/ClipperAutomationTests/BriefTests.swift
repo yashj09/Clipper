@@ -100,3 +100,53 @@ func plays(_ t: Timeline, _ w: TranscriptWord) -> Bool {
         #expect(r.timeline.tracks[0].items.count == 1)
     }
 }
+
+@Suite struct ColdOpenTests {
+    func draft(hook: Int?, rule: HookRule? = HookRule()) -> DraftResult {
+        var template = BuiltIns.talkingHead
+        template.rules.hook = rule
+        return DraftPipeline.run(briefedInput(hook.map { TranscriptBrief(model: "m", hookSentence: $0) }, template: template))
+    }
+
+    @Test func hookSentencePlaysFirstAndOnlyOnce() throws {
+        let plain = draft(hook: nil).timeline
+        let r = draft(hook: 2)
+        let t = r.timeline
+        let words = briefedInput(nil).clips[0].analysis.transcript!.words
+        let sentences = Transcript.sentences(words)
+        let items = t.tracks[0].items
+        let first = try #require(items.first?.content.mediaRef)
+        #expect(abs(first.source.start.seconds - (words[sentences[2].lowerBound].start - 0.08)) < 0.02)
+        #expect(sentences[2].allSatisfy { i in
+            let mid = (words[i].start + words[i].end) / 2
+            return first.source.start.seconds <= mid && mid < first.source.end.seconds
+        })
+        for w in words {
+            let mid = (w.start + w.end) / 2
+            #expect(primarySource(t).filter { $0.0 <= mid && mid < $0.1 }.count == 1, "\(w.text) plays once")
+        }
+        #expect(abs((t.duration - plain.duration).seconds) <= t.canvas.frameRate.frameDuration.seconds)
+        #expect(items[1].transition?.kind == .dipToWhite)
+        #expect(items.filter { $0.transition != nil }.count == 1)
+        #expect(t.markers.first?.time == .zero && t.markers.first?.name.hasPrefix("Hook: “There are no subscriptions") == true)
+        #expect(r.report.notes.contains { $0.hasPrefix("Cold open: “There are") })
+    }
+
+    @Test func nothingMovesWithoutAUsableHook() {
+        let plain = draft(hook: nil).timeline
+        #expect(draft(hook: 0).timeline == plain)
+        #expect(draft(hook: 2, rule: HookRule(maxSeconds: 2)).timeline == plain)
+        #expect(draft(hook: 2, rule: nil).timeline == plain)
+        var template = BuiltIns.talkingHead
+        template.rules.hook = nil
+        #expect(DraftPipeline.run(briefedInput(nil, template: template)).timeline == plain)
+    }
+
+    @Test func lowImportanceHookStaysPut() {
+        var template = BuiltIns.talkingHead
+        template.rules.hook = HookRule()
+        let brief = TranscriptBrief(model: "m", hookSentence: 2, sentenceImportance: [0.9, 0.8, 0.5, 0.7])
+        let r = DraftPipeline.run(briefedInput(brief, template: template))
+        #expect(!r.report.notes.contains { $0.hasPrefix("Cold open") })
+    }
+}
