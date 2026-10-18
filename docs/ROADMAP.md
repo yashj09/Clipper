@@ -50,6 +50,18 @@ Chunked transcription, signals (SoundAnalysis, loudness, scene cuts), highlight 
 - [ ] First real upload per platform, once you've created the developer apps (`clipper publish connect <platform> --help-setup`).
 - [ ] Notion/Sheets APIs: not built. The .ics feed covers calendar views without accounts.
 
+## Automatic editing, Tiers 1 and 2 (2026-10-18)
+Built on branch `auto-editing` after a survey of Descript, Opus Clip, Submagic, FireCut, CapCut, Vizard, Riverside, Premiere, Resolve 20 and Final Cut 11. Every pass is in the table in [ARCHITECTURE.md](ARCHITECTURE.md). Everything runs on-device; the LLM features need a local server (Ollama, LM Studio or mlx_lm).
+- [x] **Fixes.** Saliency reframing now gets its data (one `analysisKinds` function for CLI and app), the BeatSnap pass exists, voiced-but-untranscribed fillers are cut, the Resampler compiles on the macOS 26.4+ SDK.
+- [x] **Speech edits** (`rules.speechEdits`, on in talking-head): retakes keep the last (or best) take with a marker per removed group, stutters and restarted sentences are cut. Zooms follow emphasis (loud words, numbers, questions, sentence starts) with a pattern-interrupt cadence; captions highlight the same words.
+- [x] **Sped-up pauses** (`silenceCut.speedUp`, on in vlog): pauses up to 1.5 s play at 2.5× instead of cutting.
+- [x] **Keywords and the brief.** `keywords` analysis (NLTagger) tags numbers, names, nouns with emoji. `TranscriptBriefer` asks the local model once per clip for a title, hook sentence, sentence importance, chapters, description and hashtags (`clipper draft --llm ollama --model <m> --brief`). Drafts use the title; over-budget drafts drop the least important sentences; the hook sentence opens cold with a flash; captions get emoji; keywords become callouts; chapters become markers.
+- [x] **Local B-roll** (`rules.broll`, on in talking-head and vlog): clips named or tagged like a spoken keyword cut in for 2.5 s, muted. `--slot broll=<file>`, `--broll-tag <tag>`, or library assets named `b-roll`.
+- [x] **Visual quality.** Samples carry sharpness and luma; per-clip `ColorStats`; `ColorAdjust.suggested` (never desaturates); `clipper cover <asset|project>` picks and renders a cover frame; Export sheet has "Save cover image…".
+- [x] **Polish passes.** Auto colour (not gameplay), chapter dips and montage dissolves, synthesised sound effects (whoosh/pop/ding, no downloads, no licence), blurry or dark silent stretches skipped, opt-in profanity mute or bleep.
+- [x] **Publishing.** Description, YouTube chapter list and hashtags prefilled from the brief and markers; `publish now --dry-run`; markers in FCPXML and OTIO.
+- [ ] Your check: the Publish sheet, the Export sheet's cover button and the Settings toggles were compiled but not clicked in the running app. Try a real recording with retakes; the loudness and keyword thresholds were set on synthetic speech.
+
 ## After Phase 4: editor and performance (2026-10-15)
 - [x] **Manual editor**: rebindable keyboard shortcuts (Settings ▸ Shortcuts), media browser with drag-and-drop and Q/W/E/D edits, Add Text, In/Out range delete, J/K/L shuttle, previous/next edit, copy/paste/duplicate, trim to playhead, nudge, speed (25–400%), keyframes in the inspector with markers on clips, right-click menu, and **re-draft keeping your edits**. Guide: [editor.md](editor.md).
 - [x] **Review #23 fixed**: a loudness-normalised export builds the composition and decodes/mixes the audio once (captured to a temporary CAF while measuring).

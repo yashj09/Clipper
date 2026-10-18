@@ -41,16 +41,20 @@ clipper highlights stream.mov --llm ollama --model qwen3.5:4b  # optional local-
 clipper captions translate "3 tips" --to es,fr     # on-device translated caption tracks + subtitle files
 clipper music generate "upbeat lo-fi, warm keys" --duration 60  # local AI music (optional worker, ACE-Step)
 clipper watch ~/Movies/OBS --template gameplay --export         # auto-draft new recordings
+clipper draft -t talking-head take.mov --llm ollama --model qwen3.5:9b --brief   # title, hook, chapters from a local LLM
+clipper draft -t talking-head take.mov --slot broll=desk.mov --broll-tag b-roll   # cutaways from your own clips
+clipper cover "3 tips" -o cover.jpg                 # best frame of the edit, captions included
+clipper publish now "3 tips" --dry-run              # description with chapters and hashtags, nothing posted
 ```
 
 Built-in templates:
 
 | Template | What it does |
 |---|---|
-| `talking-head` | Tight cuts, bold captions, jump-cut zooms, music ducked under speech |
+| `talking-head` | Retakes and false starts removed, emphasis zooms, bold captions with emoji, keyword callouts, cold-open hook and title from a local LLM, B-roll from your library, sound effects, music ducked under speech |
 | `gameplay` | Commentary-driven cuts, optional facecam on top (cut in sync) |
-| `montage` | Clips cut on the beat of the music |
-| `vlog` | Gentle pause removal, B-roll trimmed to its middle, clean subtitles |
+| `montage` | Clips cut on the beat of the music, dissolves every 4th cut, blurry shots skipped, colour matched |
+| `vlog` | Short pauses sped up instead of cut, B-roll cutaways, chapter dips, clean subtitles, colour matched |
 
 The library lives at `~/Movies/Clipper/Clipper.clipperlib`. You can override it with `--library`.
 
