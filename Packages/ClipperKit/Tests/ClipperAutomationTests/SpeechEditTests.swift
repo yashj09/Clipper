@@ -164,3 +164,100 @@ func kept(_ plan: SpeechPlan) -> [String] { plan.words.map(\.text) }
         #expect(try ClipperJSON.decode(Rules.self, from: Data("{}".utf8)).speechEdits == nil)
     }
 }
+
+@Suite struct EmphasisZoomTests {
+    func evenWords(until end: Double, cue: Cue = []) -> [TimedWord] {
+        stride(from: 0.5, to: end, by: 0.35).map { TimedWord(text: "word", start: $0, end: $0 + 0.3, isFiller: false, cue: cue) }
+    }
+
+    /// Longest time between visual changes (cuts, move starts, the ends of the timeline).
+    func longestStill(_ curve: ZoomCurve, cuts: [Double], end: Double) -> Double {
+        let changes = ([0, end] + cuts + curve.moves.map(\.start)).sorted()
+        return zip(changes, changes.dropFirst()).map { $1 - $0 }.max() ?? 0
+    }
+
+    @Test func loudWordDrivesCaptionAndZoom() throws {
+        let line = "this whole editor runs on your machine and every cut lands where you expect it to land without any upload at all"
+        let tr = transcript([line], pauses: [])
+        let loud = tr.words[13]
+        let hop = 0.01
+        let rms = (0..<3000).map { i -> Float in
+            let t = Double(i) * hop
+            return t >= loud.start && t < loud.end ? -24 : -30
+        }
+        let speech = SpeechActivity(spans: [], rms: Envelope(hop: hop, values: rms), noiseFloor: -60, threshold: -50)
+        let input = DraftInput(template: BuiltIns.talkingHead, clips: [speakerClip(tr, seconds: 30, speech: speech)],
+                               settings: DraftSettings(seed: 3))
+        let plan = SpeechPlan(clip: input.clips[0], rule: SpeechEditRule())
+        #expect(plan.words[13].cue.contains(.loud))
+        #expect(plan.words.filter { $0.cue.contains(.loud) }.count == 1)
+
+        let r = DraftPipeline.run(input)
+        let video = try #require(r.timeline.tracks.first { $0.kind == .video })
+        try #require(video.items.count == 1)
+        let item = video.items[0]
+        let at = loud.start - item.content.mediaRef!.source.start.seconds
+        #expect(item.transform.zoom.keys.contains { abs($0.time.seconds - at) < 0.01 && $0.interpolation == .easeInOut },
+                "\(item.transform.zoom.keys)")
+        let captions = try #require(r.timeline.tracks.first { $0.kind == .caption })
+        let highlighted = captions.items.flatMap { i -> [String] in
+            if case .caption(let c) = i.content { c.words.filter(\.emphasis).map(\.text) } else { [] }
+        }
+        #expect(highlighted == ["expect"])
+        #expect(r.report.notes.contains { $0.hasPrefix("Added ") && $0.contains("on emphasis") })
+    }
+
+    @Test func zoomCurveSpacesRampsAndAlternates() {
+        let curve = Visual.zoomCurve(words: evenWords(until: 20, cue: .number), cuts: [], end: 20,
+                                     rule: PunchInRule(zoom: 1.12, minSpacing: 4, rampDuration: 0.25))
+        #expect(curve.moves.count >= 4)
+        #expect(zip(curve.moves, curve.moves.dropFirst()).allSatisfy { $1.start - $0.start >= 4 })
+        #expect(curve.moves.allSatisfy { $0.duration == 0.25 && $0.reason == .emphasis })
+        #expect(curve.moves.enumerated().allSatisfy { i, m in m.to == (i % 2 == 0 ? 1.12 : 1) })
+    }
+
+    @Test func emphasisJustAfterACutStepsOnTheCut() {
+        let words = [TimedWord(text: "NOW", start: 5.1, end: 5.4, isFiller: false, cue: .caps)]
+        let curve = Visual.zoomCurve(words: words, cuts: [5], end: 8, rule: PunchInRule(minSpacing: 4, maxStill: 0))
+        #expect(curve.moves == [.init(start: 5, duration: 0, to: 1.15, reason: .emphasis)])
+    }
+
+    @Test func pacingFillsLongStills() throws {
+        let rule = PunchInRule(zoom: 1.12, minSpacing: 4, rampDuration: 0.25, maxStill: 6)
+        let words = evenWords(until: 20)
+        let curve = Visual.zoomCurve(words: words, cuts: [], end: 20, rule: rule)
+        let first = try #require(curve.moves.first)
+        #expect(first.start == words.first { $0.start >= 6 }!.start)
+        #expect(curve.moves.allSatisfy { $0.reason == .pacing })
+        #expect(longestStill(curve, cuts: [], end: 20) <= 6.35)
+        let cut = Visual.zoomCurve(words: words, cuts: [3], end: 20, rule: rule)
+        #expect(try #require(cut.moves.first).start >= 9)
+        #expect(longestStill(cut, cuts: [3], end: 20) <= 6.35)
+        var off = rule
+        off.maxStill = 0
+        #expect(Visual.zoomCurve(words: words, cuts: [], end: 20, rule: off).moves.isEmpty)
+        let silent = Visual.zoomCurve(words: [], cuts: [], end: 20, rule: rule)
+        #expect(silent.moves.map(\.start) == [6, 12, 18])
+
+        let old = try ClipperJSON.decode(PunchInRule.self, from: Data(#"{"zoom": 1.1, "minSpacing": 4, "rampDuration": 0.2}"#.utf8))
+        #expect(old.maxStill == 6)
+        #expect(try ClipperJSON.decode(PunchInRule.self, from: ClipperJSON.encode(off)) == off)
+    }
+
+    @Test func curveIsSampledPerItem() {
+        let curve = ZoomCurve(moves: [.init(start: 4, duration: 0.25, to: 1.12, reason: .emphasis)])
+        let first = curve.zoom(over: TimeRange(seconds: 0, 6), base: 1)
+        #expect(first.keys.map(\.time.seconds) == [0, 4, 4.25])
+        #expect(first.keys.map(\.value) == [1, 1, 1.12])
+        #expect(curve.zoom(over: TimeRange(seconds: 6, 14), base: 1.1) == .constant(1.1 * 1.12))
+
+        var items = [Item(name: "a", range: TimeRange(seconds: 0, 6), content: .text(TextContent(text: "a", style: "s"))),
+                     Item(name: "b", range: TimeRange(seconds: 6, 14), content: .text(TextContent(text: "b", style: "s")))]
+        items[1].transform.zoom = .keyframes([Keyframe(.zero, 1), Keyframe(RationalTime(seconds: 2), 2)])
+        let words = [TimedWord(text: "60", start: 4, end: 4.3, isFiller: false, cue: .number)]
+        let out = Visual.zooms(items, words: words, rule: PunchInRule(zoom: 1.12, minSpacing: 4, maxStill: 0))
+        #expect(out.items[0].transform.zoom.isAnimated)
+        #expect(out.items[1].transform.zoom == items[1].transform.zoom)
+        #expect(out.note == "Added 1 zoom (1 on emphasis, 0 for pacing)")
+    }
+}

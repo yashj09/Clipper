@@ -172,32 +172,22 @@ public enum DraftPipeline {
             timeline.tracks.append(Track(id: ids.uuid(), kind: kind, name: slot.name, items: items))
         }
 
-        // 3. Primary-track visual passes.
+        // 3. Spoken words on the timeline (zooms, captions, ducking), then the primary-track visual passes.
+        let spoken = Speech.timedWords(primaryItems, segments: segmentOf)
         if let pti = primaryTrackIndex {
             var items = timeline.tracks[pti].items
             if primary.reframe != .none {
                 items = items.map { reframed($0, input: input, slot: primary, transform: $0.transform, canvas: template.canvas) }
             }
             if let rule = rules.punchIn {
-                let r = Visual.punchIns(items, rule: rule)
-                items = r.items
-                if r.count > 0 { report.notes.append("Added \(r.count) jump-cut zooms") }
+                let z = Visual.zooms(items, words: spoken, rule: rule)
+                items = z.items
+                if let note = z.note { report.notes.append(note) }
             }
             timeline.tracks[pti].items = items
         }
 
-        // 4. Spoken words on the timeline (captions + ducking).
-        var spoken: [TimedWord] = []
-        for item in primaryItems {
-            guard let seg = segmentOf[item.id], let ref = item.content.mediaRef else { continue }
-            let offset = item.start.seconds - ref.source.start.seconds
-            let a = ref.source.start.seconds, b = ref.source.end.seconds
-            for w in seg.words where w.start >= a - 0.02 && w.end <= b + 0.02 {
-                spoken.append(TimedWord(text: w.text, start: max(w.start + offset, item.start.seconds),
-                                        end: min(w.end + offset, item.end.seconds), isFiller: w.isFiller))
-            }
-        }
-
+        // 4. Captions.
         let captionsOn = input.settings.captions ?? (rules.captions != nil)
         if captionsOn, let rule = rules.captions {
             if let style = styles[rule.style] {

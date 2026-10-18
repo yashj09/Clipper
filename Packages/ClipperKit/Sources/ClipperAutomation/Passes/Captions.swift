@@ -7,8 +7,7 @@ struct TimedWord {
     var start: Double
     var end: Double
     var isFiller: Bool
-    /// Known emphasis (re-paging keeps the user's); nil = decide from the text.
-    var emphasis: Bool? = nil
+    var cue: Cue = []
 }
 
 enum Captions {
@@ -42,12 +41,11 @@ enum Captions {
             var end = RationalTime.frames(endSeconds, rate)
             if end <= start { end = start + rate.frameDuration }
             if let prev = items.last, prev.end > start { items[items.count - 1].range = TimeRange(start: prev.start, end: start) }
-            let longest = page.enumerated().max { $0.element.text.count < $1.element.text.count }?.offset
-            let words = page.enumerated().map { j, w in
+            let words = page.map { w in
                 CaptionContent.Word(text: display(w.text, style: style),
                                     start: RationalTime(seconds: max(0, w.start - start.seconds)),
                                     end: RationalTime(seconds: max(0, w.end - start.seconds)),
-                                    emphasis: w.emphasis ?? (isEmphasis(w.text) || (j == longest && w.text.count >= 8)))
+                                    emphasis: w.cue.highlights)
             }
             var item = Item(id: ids.uuid(), name: "Caption \(i + 1)", range: TimeRange(start: start, end: end),
                             content: .caption(CaptionContent(words: words, style: styleName)), origin: .auto(pass: "captions"))
@@ -64,32 +62,9 @@ enum Captions {
         while let last = t.last, ",.;:".contains(last) { t.removeLast() }
         return t.isEmpty ? text : t
     }
-
-    static func isEmphasis(_ text: String) -> Bool {
-        text.contains { $0.isNumber } || text.hasSuffix("!") || (text.count >= 2 && text == text.uppercased() && text.contains { $0.isLetter })
-    }
 }
 
 enum Visual {
-    /// Jump-cut zoom: alternate items get a tighter framing, and long items get a slow push-in.
-    static func punchIns(_ items: [Item], rule: PunchInRule) -> (items: [Item], count: Int) {
-        var out = items
-        var parity = 0, count = 0
-        for i in out.indices {
-            let d = out[i].range.duration.seconds
-            guard d >= 1.0 else { continue }
-            let base = parity % 2 == 1 ? rule.zoom : 1.0
-            parity += 1
-            if base > 1 { count += 1 }
-            if d >= rule.minSpacing * 1.5 {
-                out[i].transform.zoom = .keyframes([Keyframe(.zero, base, .easeInOut), Keyframe(out[i].range.duration, base * 1.05)])
-            } else if base != 1 {
-                out[i].transform.zoom = .constant(base)
-            }
-        }
-        return (out, count)
-    }
-
     /// Keeps the speaker's face in frame when the source is cropped to the slot (e.g. 16:9 → 9:16):
     /// smoothed face centres become `focus` keyframes, simplified with Ramer–Douglas–Peucker.
     static func reframe(_ item: Item, faces: FaceTrack, sourceAspect: Double, boxAspect: Double) -> Item {
@@ -150,7 +125,7 @@ public enum CaptionPaging {
             guard case .caption(let c) = item.content else { continue }
             for w in c.words {
                 words.append(TimedWord(text: w.text, start: (item.start + w.start).seconds, end: (item.start + w.end).seconds,
-                                       isFiller: false, emphasis: w.emphasis))
+                                       isFiller: false, cue: w.emphasis ? .marked : []))
             }
         }
         guard !words.isEmpty else { return captions }

@@ -269,7 +269,8 @@ func talkingInput(seed: UInt64 = 7, title: String? = "Local editing in 60s") -> 
         let s = BuiltIns.styles["bold-pop"]!
         #expect(Captions.display("editor.", style: s) == "editor")
         #expect(Captions.display("really?", style: s) == "really?")
-        #expect(Captions.isEmphasis("60") && Captions.isEmphasis("wow!") && !Captions.isEmphasis("hello"))
+        let words = ["60", "wow!", "hello", "OK", "I,", "three"].map { TranscriptWord(text: $0, start: 0, end: 0.3) }
+        #expect(Speech.cues(words, sentences: [], speech: nil, english: true).map(\.highlights) == [true, true, false, true, false, true])
     }
 }
 

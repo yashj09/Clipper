@@ -94,6 +94,50 @@ have speech_noisy.wav || ff -i "$OUT/speech_clean.wav" \
   -f lavfi -i "sine=f=220:sample_rate=16000,volume=0.08" -f lavfi -i "sine=f=330:sample_rate=16000,volume=0.06" \
   -filter_complex "[0:a][1:a][2:a][3:a]amix=inputs=4:duration=first:normalize=0" -ac 1 "$OUT/speech_noisy.wav"
 
+# Retakes: one line recorded three times with small wording changes (the third is the keeper), a restart, a
+# stutter, a question and a number. Ground truth, with what the speech edits should remove, goes to
+# speech_retakes_truth.json.
+if ! have speech_retakes.wav; then
+  VOICE="${VOICE:-Samantha}"; say -v "$VOICE" "test" -o "$OUT/tmp/v.aiff" 2>/dev/null || VOICE="Eddy (English (US))"
+  python3 - "$OUT" "$VOICE" <<'PY'
+import json, subprocess, sys, os
+out, voice = sys.argv[1], sys.argv[2]
+sentences = [
+  "Hi everyone, today I want to show you how this editor handles mistakes.",
+  "The new version removes every long pause automatically.",
+  "The new version removes every long pause for you automatically.",
+  "The new version removes every single long pause automatically.",
+  "So the, so the main thing is that it runs on your own machine.",
+  "And the the captions follow every word you say.",
+  "Can you guess how long the whole edit took?",
+  "It took about 12 seconds on a laptop.",
+]
+gaps = [0.8, 1.0, 1.0, 0.8, 0.8, 0.8, 0.6]
+segs, t, truth = [], 0.0, []
+for i, s in enumerate(sentences):
+    a, w = f"{out}/tmp/r{i}.aiff", f"{out}/tmp/r{i}.wav"
+    subprocess.run(["say", "-v", voice, "-o", a, s], check=True)
+    subprocess.run(["ffmpeg","-hide_banner","-loglevel","error","-y","-i",a,"-af",
+        "silenceremove=start_periods=1:start_threshold=-50dB,areverse,silenceremove=start_periods=1:start_threshold=-50dB,areverse",
+        "-ar","16000","-ac","1",w], check=True)
+    d = float(subprocess.check_output(["ffprobe","-v","error","-show_entries","format=duration","-of","csv=p=0",w]))
+    truth.append({"text": s, "start": round(t,3), "end": round(t+d,3)})
+    segs.append(w); t += d
+    if i < len(gaps):
+        g = f"{out}/tmp/rg{i}.wav"
+        subprocess.run(["ffmpeg","-hide_banner","-loglevel","error","-y","-f","lavfi","-i",
+            f"anullsrc=r=16000:cl=mono","-t",str(gaps[i]),g], check=True)
+        segs.append(g); t += gaps[i]
+with open(f"{out}/tmp/rlist.txt","w") as f:
+    f.writelines(f"file '{os.path.abspath(p)}'\n" for p in segs)
+subprocess.run(["ffmpeg","-hide_banner","-loglevel","error","-y","-f","concat","-safe","0","-i",f"{out}/tmp/rlist.txt",
+    "-ar","16000","-ac","1","-c:a","pcm_s16le",f"{out}/speech_retakes.wav"], check=True)
+expected = {"retakes": {"sentences": [1, 2, 3], "kept": 3}, "falseStarts": ["So the,", "the"], "question": 6, "number": 7}
+json.dump({"voice": voice, "duration": round(t,3), "gaps": gaps, "sentences": truth, "expected": expected},
+          open(f"{out}/speech_retakes_truth.json","w"), indent=2)
+PY
+fi
+
 # --- S5: long media ------------------------------------------------------------------------
 # 1080p60 HEVC with a 2 s GOP, like a typical OBS or phone recording, plus stereo audio.
 have "long_${LONG_MIN}min_1080p60.mov" || ff \

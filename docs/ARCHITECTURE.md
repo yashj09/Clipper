@@ -73,15 +73,16 @@ Ingest → probe → mezzanine/proxy → analysis jobs (transcript, speechActivi
 | # | Pass | Summary |
 |---|---|---|
 | 1 | InstantiateSkeleton | Fill template slots by role and order |
-| 2 | SilenceCut | **Snap word edges to voice activity first.** Transcriber end times run 130–500 ms early. The only voice-activity detector is the RMS envelope; noisy audio has no dedicated VAD yet, so its edges snap less accurately. Then cut gaps longer than minGap, pad 80/120 ms, and drop fillers (transcribed fillers plus voiced audio with no word) |
-| 3 | FitDuration | Drop the segments with the fewest words per second until under maxDuration |
-| 4 | PickMusic | Score by mood + BPM range + length fit; end on a phrase or downbeat; add CC attribution |
-| 5 | BeatSnap | Move cut points to the nearest beat (never inside speech) |
-| 6 | Captions | Group words into lines and apply a style preset |
-| 7 | PunchIns | Zoom keyframes (1.0 → 1.15) on emphasis, with minimum spacing |
-| 8 | Reframe | Face track → spring-smoothed crop keyframes, simplified with Ramer–Douglas–Peucker |
-| 9 | Duck | Volume ramps on music under speech (−12 dB, 150 ms attack, 400 ms release) |
-| 10 | LoudnessTarget | Applied at export |
+| 2 | SpeechPlan | Per clip, in source time: drop stutters and restarts, keep one take of a repeated line (last complete or best) and mark it, tag kept words with emphasis cues. The cutter subtracts what it excludes |
+| 3 | SilenceCut | **Snap word edges to voice activity first.** Transcriber end times run 130–500 ms early. The only voice-activity detector is the RMS envelope; noisy audio has no dedicated VAD yet, so its edges snap less accurately. Then cut gaps longer than minGap, pad 80/120 ms, and drop fillers (transcribed fillers plus voiced audio with no word) |
+| 4 | FitDuration | Drop the segments with the fewest words per second until under maxDuration |
+| 5 | PickMusic | Score by mood + BPM range + length fit; end on a phrase or downbeat; add CC attribution |
+| 6 | BeatSnap | Move cut points to the nearest beat (never inside speech) |
+| 7 | Captions | Group words into lines and apply a style preset |
+| 8 | PunchIns | One zoom curve over the track. Cued words zoom in or out at least minSpacing apart, stepping on a cut just before them; a slow push fills any stretch over maxStill with no cut or zoom. No move straddles a cut |
+| 9 | Reframe | Face track → spring-smoothed crop keyframes, simplified with Ramer–Douglas–Peucker |
+| 10 | Duck | Volume ramps on music under speech (−12 dB, 150 ms attack, 400 ms release) |
+| 11 | LoudnessTarget | Applied at export |
 
 ## Concurrency
 - Swift 6 strict concurrency throughout.

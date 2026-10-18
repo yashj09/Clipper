@@ -37,7 +37,7 @@ public enum BuiltIns {
     }
 
     public static let talkingHead = Template(
-        id: "talking-head", name: "Talking head", summary: "One speaker, tight cuts, bold captions, jump-cut zooms, music ducked under speech.",
+        id: "talking-head", name: "Talking head", summary: "One speaker, retakes and stutters removed, tight cuts, bold captions, emphasis zooms, music ducked under speech.",
         contentType: .talkingHead, canvas: Canvas(width: 1080, height: 1920, frameRate: .fps30),
         slots: [Slot(id: "speaker", name: "Speaker", role: .primary, reframe: .face)],
         elements: [title("title-bold", seconds: 2.5)],

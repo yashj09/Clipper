@@ -262,6 +262,21 @@ enum Speech {
         return found.sorted { $0.time < $1.time }.map { Marker(id: ids.uuid(), time: $0.time, name: $0.name) }
     }
 
+    /// Words on the timeline with their cues, from each primary item's segment.
+    static func timedWords(_ items: [Item], segments: [ItemID: Segment]) -> [TimedWord] {
+        var out: [TimedWord] = []
+        for item in items {
+            guard let seg = segments[item.id], let ref = item.content.mediaRef else { continue }
+            let offset = item.start.seconds - ref.source.start.seconds
+            let a = ref.source.start.seconds, b = ref.source.end.seconds
+            for w in seg.words where w.start >= a - 0.02 && w.end <= b + 0.02 {
+                out.append(TimedWord(text: w.text, start: max(w.start + offset, item.start.seconds),
+                                     end: min(w.end + offset, item.end.seconds), isFiller: w.isFiller, cue: w.cue))
+            }
+        }
+        return out
+    }
+
     static func clock(_ s: Double) -> String { String(format: "%d:%04.1f", Int(s) / 60, s.truncatingRemainder(dividingBy: 60)) }
 
     static let numberWords: Set<String> = [

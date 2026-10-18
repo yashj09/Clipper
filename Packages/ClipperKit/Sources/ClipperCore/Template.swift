@@ -116,12 +116,23 @@ public struct BeatSnapRule: Codable, Sendable, Equatable {
 
 public struct PunchInRule: Codable, Sendable, Equatable {
     public var zoom: Double
-    /// Minimum seconds between punch-ins.
+    /// Minimum seconds between zoom changes.
     public var minSpacing: Double
     /// Seconds over which the zoom eases in.
     public var rampDuration: Double
-    public init(zoom: Double = 1.15, minSpacing: Double = 5, rampDuration: Double = 0.25) {
-        self.zoom = zoom; self.minSpacing = minSpacing; self.rampDuration = rampDuration
+    /// Longest stretch, in seconds, with no cut and no zoom change before a pacing move is added. 0 turns pacing
+    /// moves off; values below `minSpacing` behave as `minSpacing`.
+    public var maxStill: Double
+    public init(zoom: Double = 1.15, minSpacing: Double = 5, rampDuration: Double = 0.25, maxStill: Double = 6) {
+        self.zoom = zoom; self.minSpacing = minSpacing; self.rampDuration = rampDuration; self.maxStill = maxStill
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        zoom = try c.decode(Double.self, forKey: .zoom)
+        minSpacing = try c.decode(Double.self, forKey: .minSpacing)
+        rampDuration = try c.decode(Double.self, forKey: .rampDuration)
+        maxStill = try c.decodeIfPresent(Double.self, forKey: .maxStill) ?? 6
     }
 }
 
