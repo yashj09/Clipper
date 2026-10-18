@@ -92,9 +92,21 @@ public struct SilenceCutRule: Codable, Sendable, Equatable {
     public var padBefore: Double
     public var padAfter: Double
     public var removeFillers: Bool
-    public init(minGap: Double = 0.4, padBefore: Double = 0.08, padAfter: Double = 0.12, removeFillers: Bool = true) {
+    /// Pauses up to `speedUp.maxPause` are played fast instead of cut, so the footage stays continuous. Off when nil.
+    public var speedUp: SpeedUpRule?
+    public init(minGap: Double = 0.4, padBefore: Double = 0.08, padAfter: Double = 0.12, removeFillers: Bool = true,
+                speedUp: SpeedUpRule? = nil) {
         self.minGap = minGap; self.padBefore = padBefore; self.padAfter = padAfter; self.removeFillers = removeFillers
+        self.speedUp = speedUp
     }
+}
+
+public struct SpeedUpRule: Codable, Sendable, Equatable {
+    /// Pauses up to this long (seconds) are kept and played fast; longer ones are cut as before.
+    public var maxPause: Double
+    /// Playback rate for the kept pause.
+    public var rate: Double
+    public init(maxPause: Double = 1.5, rate: Double = 2.5) { self.maxPause = maxPause; self.rate = rate }
 }
 
 public struct BeatCutRule: Codable, Sendable, Equatable {

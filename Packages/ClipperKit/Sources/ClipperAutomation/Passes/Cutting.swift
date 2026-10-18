@@ -1,26 +1,40 @@
 import ClipperCore
 import Foundation
 
-/// A kept piece of a source clip, before placement on the timeline.
+/// A kept piece of a source clip, before placement on the timeline. A sped-up pause has `speed > 1`, no words, and
+/// abuts the speech on both sides, so the footage plays on without a cut.
 struct Segment: Equatable {
     var clip: Int
     var start: Double
     var end: Double
     /// Words inside the segment (source seconds), with their emphasis cues.
     var words: [SpokenWord]
+    var speed: Double = 1
+    /// Source seconds.
     var duration: Double { end - start }
+    var timelineDuration: Double { duration / speed }
     /// Words per second: how "dense" this piece is, for trimming to a max duration.
     var density: Double { duration > 0 ? Double(words.filter { !$0.isFiller }.count) / duration : 0 }
     var hasSpeech: Bool { words.contains { !$0.isFiller } }
 }
 
 enum Cutting {
+    struct Piece: Equatable {
+        var range: ClosedRange<Double>
+        /// 1 for speech; the rule's rate for a pause kept and played fast.
+        var speed: Double = 1
+    }
+
     /// Source ranges to keep for one clip: speech (non-filler words, or detected voice) merged across short pauses,
     /// padded, with long pauses and fillers cut out. Fillers are transcribed ones plus voiced stretches with no word.
     /// Clips with no detected speech are kept whole. No returned range intersects `excluded`: words in it are not
     /// kept, no merge crosses it, and padding is cut back at its edges.
+    ///
+    /// With `rule.speedUp`, a cut pause no longer than `maxPause`, with no filler or excluded range in it, comes back
+    /// as a fast piece filling exactly the space between the padded speech on either side. The speech pieces are the
+    /// same as without the rule.
     static func keepRanges(words: [TranscriptWord], speech: SpeechActivity?, clip: ClosedRange<Double>,
-                           rule: SilenceCutRule, excluded: RangeSet<Double> = RangeSet()) -> [ClosedRange<Double>] {
+                           rule: SilenceCutRule, excluded: RangeSet<Double> = RangeSet()) -> [Piece] {
         let inClip: (Double, Double) -> Bool = { s, e in e > clip.lowerBound && s < clip.upperBound }
         let kept = words.filter {
             inClip($0.start, $0.end) && !(rule.removeFillers && $0.isFiller) && !excluded.contains(($0.start + $0.end) / 2)
@@ -31,7 +45,7 @@ enum Cutting {
         } else {
             intervals = (speech?.spans ?? []).filter { inClip($0.start, $0.end) }.map { (max($0.start, clip.lowerBound), min($0.end, clip.upperBound)) }
         }
-        guard !intervals.isEmpty else { return subtracting(excluded, from: [clip]) }
+        guard !intervals.isEmpty else { return subtracting(excluded, from: [clip]).map { Piece(range: $0) } }
         intervals.sort { $0.0 < $1.0 }
         var fillers = rule.removeFillers ? words.filter { $0.isFiller && $0.end - $0.start >= 0.12 }.map { ($0.start, $0.end) } : []
         // Without words the voice spans are the speech itself, and every one of them would count as unworded.
@@ -40,21 +54,43 @@ enum Cutting {
                 .filter { inClip($0.start, $0.end) }.map { (max($0.start, clip.lowerBound), min($0.end, clip.upperBound)) }
         }
 
+        let speedUp = rule.speedUp.flatMap { $0.rate > 1 ? $0 : nil }
         var merged: [(Double, Double)] = [intervals[0]]
+        var fastGapBefore: Set<Int> = []
         for iv in intervals.dropFirst() {
             let last = merged[merged.count - 1]
             let gap = iv.0 - last.1
             let fillerInGap = fillers.contains { $0.0 >= last.1 - 0.02 && $0.1 <= iv.0 + 0.02 }
             let excludedInGap = iv.0 > last.1 && !excluded.isDisjoint(RangeSet(last.1..<iv.0))
-            if gap < rule.minGap && !fillerInGap && !excludedInGap { merged[merged.count - 1].1 = max(last.1, iv.1) } else { merged.append(iv) }
+            if gap < rule.minGap && !fillerInGap && !excludedInGap {
+                merged[merged.count - 1].1 = max(last.1, iv.1)
+            } else {
+                if let speedUp, gap <= speedUp.maxPause, !fillerInGap, !excludedInGap { fastGapBefore.insert(merged.count) }
+                merged.append(iv)
+            }
         }
         // Pad, clamp to the clip, then merge pads that now touch.
         var padded: [(Double, Double)] = []
-        for (s, e) in merged {
+        var pauses: [(Double, Double)] = []
+        for (i, (s, e)) in merged.enumerated() {
             let p = (max(clip.lowerBound, s - rule.padBefore), min(clip.upperBound, e + rule.padAfter))
-            if let last = padded.last, p.0 <= last.1 { padded[padded.count - 1].1 = max(last.1, p.1) } else { padded.append(p) }
+            if let last = padded.last, p.0 <= last.1 {
+                padded[padded.count - 1].1 = max(last.1, p.1)
+            } else {
+                if fastGapBefore.contains(i), let last = padded.last, p.0 - last.1 >= 0.1 { pauses.append((last.1, p.0)) }
+                padded.append(p)
+            }
         }
-        return subtracting(excluded, from: padded.map { $0.0...$0.1 })
+        let speechPieces = subtracting(excluded, from: padded.map { $0.0...$0.1 })
+        var pieces: [Piece] = []
+        for r in speechPieces {
+            // Pauses hold no excluded time, so the speech either side keeps its padded edge exactly.
+            if let speedUp, let last = pieces.last, pauses.contains(where: { $0.0 == last.range.upperBound && $0.1 == r.lowerBound }) {
+                pieces.append(Piece(range: last.range.upperBound...r.lowerBound, speed: min(speedUp.rate, 16)))
+            }
+            pieces.append(Piece(range: r))
+        }
+        return pieces
     }
 
     /// `ranges` with `excluded` cut out, dropping slivers under 0.1 s.
@@ -67,18 +103,20 @@ enum Cutting {
     /// plan, so cues ride along to layout.
     static func segments(for clipIndex: Int, clip: ClipInput, rule: SilenceCutRule?, plan: SpeechPlan) -> [Segment] {
         let words = clip.analysis.transcript?.words ?? []
-        let ranges = rule.map { keepRanges(words: words, speech: clip.analysis.speech, clip: clip.range, rule: $0, excluded: plan.excluded) }
-            ?? subtracting(plan.excluded, from: [clip.range])
-        return ranges.map { r in
-            Segment(clip: clipIndex, start: r.lowerBound, end: r.upperBound,
-                    words: plan.words.filter { $0.start >= r.lowerBound - 0.05 && $0.end <= r.upperBound + 0.05 })
+        let pieces = rule.map { keepRanges(words: words, speech: clip.analysis.speech, clip: clip.range, rule: $0, excluded: plan.excluded) }
+            ?? subtracting(plan.excluded, from: [clip.range]).map { Piece(range: $0) }
+        return pieces.map { p in
+            let r = p.range
+            // A fast pause carries no words, not even a dropped short filler: word timing assumes real-time playback.
+            let words = p.speed == 1 ? plan.words.filter { $0.start >= r.lowerBound - 0.05 && $0.end <= r.upperBound + 0.05 } : []
+            return Segment(clip: clipIndex, start: r.lowerBound, end: r.upperBound, words: words, speed: p.speed)
         }
     }
 
     /// Clips without speech (B-roll) are trimmed to their middle `maxLength` seconds.
     static func trimSilent(_ segments: [Segment], maxLength: Double) -> [Segment] {
         segments.map { seg in
-            guard !seg.hasSpeech, seg.duration > maxLength else { return seg }
+            guard seg.speed == 1, !seg.hasSpeech, seg.duration > maxLength else { return seg }
             var s = seg
             let mid = (seg.start + seg.end) / 2
             s.start = mid - maxLength / 2; s.end = mid + maxLength / 2

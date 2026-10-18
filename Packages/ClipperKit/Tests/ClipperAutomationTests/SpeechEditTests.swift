@@ -73,7 +73,7 @@ func kept(_ plan: SpeechPlan) -> [String] { plan.words.map(\.text) }
             let plan = SpeechPlan(clip: clip, rule: SpeechEditRule())
             #expect(!plan.excluded.isEmpty)
             for rule in [SilenceCutRule(), SilenceCutRule(minGap: 2, padBefore: 0.3, padAfter: 0.3)] {
-                let ranges = Cutting.keepRanges(words: tr.words, speech: nil, clip: clip.range, rule: rule, excluded: plan.excluded)
+                let ranges = Cutting.keepRanges(words: tr.words, speech: nil, clip: clip.range, rule: rule, excluded: plan.excluded).map(\.range)
                 #expect(!ranges.isEmpty)
                 #expect(ranges.allSatisfy { plan.excluded.isDisjoint(RangeSet($0.lowerBound..<$0.upperBound)) }, "\(ranges)")
             }
