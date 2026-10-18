@@ -18,7 +18,7 @@ public enum Resampler {
         let expected = Int((Double(input.count) * target / source).rounded())
         var output: [Float] = []
         output.reserveCapacity(expected + chunk)
-        var position = 0
+        nonisolated(unsafe) var position = 0  // the converter calls the input block synchronously on this thread
         let feed = Feed()
         guard let outBuffer = AVAudioPCMBuffer(pcmFormat: outFormat, frameCapacity: AVAudioFrameCount(chunk)) else { return input }
 
