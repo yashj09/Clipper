@@ -28,7 +28,9 @@ public struct TranscriptBriefer: Sendable {
     public func analyzerID(_ transcript: Transcript, context: String?) -> String {
         let sent = Self.sentences(transcript).map(\.text).joined(separator: "\n") + "\u{0}" + (context ?? "")
         let digest = SHA256.hash(data: Data(sent.utf8)).prefix(6).map { String(format: "%02x", $0) }.joined()
-        return "brief.\(endpoint.model).\(digest)"
+        // Model ids carry ":" (Ollama tags) and "/" (LM Studio, mlx), which the library refuses in a file name.
+        let model = String(endpoint.model.map { $0 == ":" || $0 == "/" || $0 == "\\" ? "_" : $0 })
+        return "brief.\(model).\(digest)"
     }
 
     public func brief(_ transcript: Transcript, key: AssetKey, context: String? = nil,

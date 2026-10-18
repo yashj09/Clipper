@@ -1,6 +1,7 @@
 @testable import ClipperAnalysis
 import ClipperCore
 import Foundation
+import Synchronization
 import Testing
 
 /// `count` sentences of `wordsPerSentence` words, 3 s apart, each ending in a period; sentence i starts at 3i seconds.
@@ -138,6 +139,29 @@ private func session() -> URLSession { URLSession(configuration: .ephemeral) }
 
         _ = try await briefer.brief(t, key: AssetKey("asset"), context: "Other context")
         #expect(server.chatRequests.count == 2)
+    }
+
+    @Test func cacheWorksForModelIdsWithTagsAndOrgs() async throws {
+        /// Refuses the file-name characters the library refuses.
+        final class StrictCache: AnalysisCache, @unchecked Sendable {
+            let inner = Mutex<[String: Data]>([:])
+            func load(key: AssetKey, analyzer: String, version: Int) async -> Data? { inner.withLock { $0[analyzer] } }
+            func store(_ data: Data, key: AssetKey, analyzer: String, version: Int) async throws {
+                guard !analyzer.contains(":"), !analyzer.contains("/") else { throw CancellationError() }
+                inner.withLock { $0[analyzer] = data }
+            }
+        }
+        let server = try await MockLLMServer { req in
+            (200, MockLLMServer.chat(json(["title": "T", "hook": 0, "importance": req.sentenceIDs.map { _ in 1 },
+                                           "chapters": [], "description": "d", "hashtags": []])))
+        }
+        let briefer = TranscriptBriefer(endpoint: server.endpoint(model: "org/qwen3.5:9b"), cache: StrictCache(),
+                                        session: session())
+        let t = transcript(sentences: 2)
+        _ = try await briefer.brief(t, key: AssetKey("asset"))
+        _ = try await briefer.brief(t, key: AssetKey("asset"))
+        #expect(server.chatRequests.count == 1)
+        #expect(briefer.analyzerID(t, context: nil).hasPrefix("brief.org_qwen3.5_9b."))
     }
 
     @Test func emptyTranscriptAndNonLocalEndpoints() async throws {
