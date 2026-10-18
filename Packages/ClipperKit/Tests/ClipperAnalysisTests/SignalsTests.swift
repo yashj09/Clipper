@@ -476,3 +476,38 @@ private final class CountingCache: AnalysisCache {
         #expect(AnalysisKind(rawValue: "events") == .events && AnalysisKind(rawValue: "visual") == .visual)
     }
 }
+
+// MARK: - Suggested colour through the compositor
+
+@Suite struct SuggestedColorRoundTripTests {
+    /// Grades the fixture dark and warm through the real compositor, measures it, then renders the suggested correction
+    /// on top: the measured luma and red/blue balance must both land closer to neutral.
+    @Test(.enabled(if: SignalMedia.has("bg_1080x1920_60.mov"), "Fixtures/bg_1080x1920_60.mov not present"))
+    func suggestionMovesARenderedClipTowardNeutral() async throws {
+        let source = try await MediaProbe.makeAsset(try #require(SignalMedia.fixture("bg_1080x1920_60.mov")))
+        var preset = try #require(ExportPreset.named("master-hevc"))
+        preset.sidecars = []
+        func render(_ asset: MediaAsset, _ color: ColorAdjust) async throws -> MediaAsset {
+            var item = Item(range: TimeRange(seconds: 0, 3), content: .media(MediaRef(asset: asset.id, source: TimeRange(seconds: 0, 3))))
+            item.color = color
+            let tl = Timeline(name: "c", canvas: Canvas(width: 270, height: 480), tracks: [Track(kind: .video, items: [item])])
+            let out = SignalMedia.tempURL("mov")
+            _ = try await Exporter.export(tl, assets: [asset.id: asset], preset: preset, to: out)
+            return try await MediaProbe.makeAsset(out)
+        }
+        func measure(_ asset: MediaAsset) async throws -> ColorStats {
+            try #require(try await AnalysisPipeline(cache: nil).analyze(asset, kinds: [.color]).color)
+        }
+        let graded = try await render(source, ColorAdjust(exposure: -1.5, temperature: 0.6))
+        defer { try? FileManager.default.removeItem(at: graded.renderURL) }
+        let before = try await measure(graded)
+        let fix = ColorAdjust.suggested(for: before)
+        let corrected = try await render(graded, fix)
+        defer { try? FileManager.default.removeItem(at: corrected.renderURL) }
+        let after = try await measure(corrected)
+        print("graded \(before)\nsuggested \(fix)\ncorrected \(after)")
+        #expect(fix.exposure > 0 && fix.temperature < 0)
+        #expect(abs(after.luma - 0.45) < abs(before.luma - 0.45))
+        #expect(abs(after.r / after.b - 1) < abs(before.r / before.b - 1))
+    }
+}

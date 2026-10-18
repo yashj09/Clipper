@@ -134,6 +134,49 @@ public struct ColorAdjust: Codable, Sendable, Equatable, Hashable {
     }
 }
 
+extension ColorAdjust {
+    /// A starting grade picked for a clip from its measured colour. `none` leaves the clip untouched.
+    public enum Look: String, Codable, Sendable, CaseIterable { case natural, none }
+
+    /// The adjustment that moves `stats` toward a neutral, well-exposed clip. Each control inverts the compositor's
+    /// `color_adjust` (GPU.swift) for the statistic it moves. Rows run in order, and a later row measures through
+    /// the earlier rows' result, so contrast sees the exposed range and saturation sees both.
+    public static func suggested(for stats: ColorStats, look: Look = .natural) -> ColorAdjust {
+        switch look {
+        case .none: return .none
+        case .natural: break
+        }
+        // Exposure scales display values by 2^(stops / 2.2) (it multiplies linear light, decoded with gamma 2.2).
+        func gain(_ a: ColorAdjust) -> Double { pow(2, a.exposure / 2.2) }
+        typealias Rule = (control: WritableKeyPath<ColorAdjust, Double>, measure: (ColorAdjust) -> Double, target: Double,
+                          deadBand: Double, gain: Double, limit: Double, full: (_ measured: Double, _ target: Double) -> Double)
+        let avg = (stats.r + stats.b) / 2
+        let rules: [Rule] = [
+            (\.exposure, { _ in stats.luma }, 0.45, 0.05, 0.8, 3, { m, t in 2.2 * log2(t / m) }),
+            // Contrast scales values around 0.5 by (1 + c).
+            (\.contrast, { a in min(1, stats.p99 * gain(a)) - min(1, stats.p01 * gain(a)) }, 0.9, 0.1, 0.5, 0.3,
+             { m, t in t / m - 1 }),
+            // Saturation scales chroma by (1 + s); exposure and contrast already scaled it.
+            (\.saturation, { a in stats.saturation * gain(a) * (1 + a.contrast) }, 0.35, 0.05, 0.3, 0.2,
+             { m, t in t / m - 1 }),
+            // Temperature multiplies linear red by (1 + 0.2 t) and blue by (1 − 0.2 t): solved for equal means.
+            (\.temperature, { _ in stats.r / max(stats.b, 1e-3) }, 1, 0.05, 0.3, 0.25,
+             { m, t in let q = pow(t / m, 2.2); return 5 * (q - 1) / (q + 1) }),
+            // Tint multiplies linear green by (1 − 0.15 tint): solved for green equal to the red/blue mean.
+            (\.tint, { _ in stats.g / max(avg, 1e-3) }, 1, 0.05, 0.3, 0.15,
+             { m, t in (1 - pow(t / m, 2.2)) / 0.15 }),
+        ]
+        var adjust = ColorAdjust()
+        for rule in rules {
+            let measured = max(rule.measure(adjust), 1e-3)
+            guard abs(measured - rule.target) > rule.deadBand else { continue }
+            let value = min(max(rule.gain * rule.full(measured, rule.target), -rule.limit), rule.limit)
+            adjust[keyPath: rule.control] = (value * 100).rounded() / 100
+        }
+        return adjust
+    }
+}
+
 /// How a layer combines with what's below it.
 public enum BlendMode: String, Codable, Sendable, CaseIterable {
     case normal, add, screen, multiply
