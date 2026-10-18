@@ -33,7 +33,21 @@ public enum DraftPipeline {
         var music: MusicTrack?
         var musicOffset = 0.0
         var coldOpen: Hook.ColdOpen?
+        var skipped = (shots: 0, seconds: 0.0)
+        /// A clip's bad shots, or none when they are most of it.
+        func badShots(_ clip: ClipInput, sparing words: [SpokenWord] = []) -> [ClosedRange<Double>] {
+            guard let rule = rules.badShots else { return [] }
+            let bad = Cutting.badRanges(clip, rule: rule, sparing: words)
+            let lost = bad.reduce(0) { $0 + $1.upperBound - $1.lowerBound }
+            if lost > 0.8 * (clip.range.upperBound - clip.range.lowerBound) {
+                report.warnings.append("\(clip.asset.name) is mostly blurry or badly exposed: kept all of it")
+                return []
+            }
+            skipped.shots += bad.count; skipped.seconds += lost
+            return bad
+        }
         if let beatRule = rules.beatCut {
+            let primaryClips = primaryClips.flatMap { Cutting.splitting($0, around: badShots($0), minLength: beatRule.minClip) }
             let total = primaryClips.reduce(0) { $0 + $1.range.upperBound - $1.range.lowerBound }
             let target = min(maxDuration ?? 30, total)
             if wantsMusic {
@@ -56,7 +70,8 @@ public enum DraftPipeline {
             }
         } else {
             for (i, clip) in input.clips.enumerated() where (clip.slot ?? primary.id) == primary.id {
-                let plan = SpeechPlan(clip: clip, rule: rules.speechEdits)
+                var plan = SpeechPlan(clip: clip, rule: rules.speechEdits)
+                for r in badShots(clip, sparing: plan.words) { plan.excluded.insert(contentsOf: r.lowerBound..<r.upperBound) }
                 plans[i] = plan
                 report.removedTakes += plan.removedTakes
                 report.removedRestarts += plan.removedRestarts
@@ -105,6 +120,10 @@ public enum DraftPipeline {
                 report.notes.append(String(format: "Sped up %d pauses (%.1fs → %.1fs at %.1fx)", pauses.count,
                                            pauses.reduce(0) { $0 + $1.duration }, pauses.reduce(0) { $0 + $1.timelineDuration }, rate))
             }
+        }
+
+        if skipped.shots > 0 {
+            report.notes.append(String(format: "Skipped %d blurry or dark shot%@ (%.1fs)", skipped.shots, skipped.shots == 1 ? "" : "s", skipped.seconds))
         }
 
         // 2. Lay out slots as tracks.
@@ -406,6 +425,7 @@ public enum DraftPipeline {
         }
         if rules.callouts != nil || rules.captions?.emoji == true || rules.broll != nil { kinds.formUnion([.speech, .transcript, .keywords]) }
         if rules.color != nil { kinds.insert(.color) }
+        if rules.badShots != nil { kinds.insert(.visual) }
         return kinds.union(framing(template.slots.filter { !isCandidate($0) }))
     }
 

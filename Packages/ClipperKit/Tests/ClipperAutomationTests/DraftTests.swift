@@ -175,7 +175,7 @@ func talkingInput(seed: UInt64 = 7, title: String? = "Local editing in 60s") -> 
         #expect(DraftPipeline.analysisKinds(for: BuiltIns.gameplay) == [.speech, .transcript, .faces, .visual])
         #expect(DraftPipeline.analysisKinds(for: BuiltIns.gameplay, slot: "facecam") == [.speech, .transcript, .faces, .visual])
         #expect(DraftPipeline.analysisKinds(for: BuiltIns.montage) == [.visual, .color])
-        #expect(DraftPipeline.analysisKinds(for: BuiltIns.vlog) == [.speech, .transcript, .faces, .keywords, .color])
+        #expect(DraftPipeline.analysisKinds(for: BuiltIns.vlog) == [.speech, .transcript, .faces, .keywords, .color, .visual])
     }
 
     @Test func draftsAreDeterministic() throws {

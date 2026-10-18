@@ -323,6 +323,28 @@ public struct SFXRule: Codable, Sendable, Equatable {
     }
 }
 
+/// Footage dropped for being blurry or badly exposed, judged on the `.visual` samples (about one a second).
+public struct BadShotRule: Codable, Sendable, Equatable {
+    /// `VisualSample.sharpness` below this is blurry.
+    public var minSharpness: Double
+    /// `VisualSample.luma` outside this range is too dark or blown out.
+    public var minLuma: Double
+    public var maxLuma: Double
+    /// Shortest bad stretch worth cutting.
+    public var minSeconds: Double
+    public init(minSharpness: Double = 0.15, minLuma: Double = 0.08, maxLuma: Double = 0.95, minSeconds: Double = 1.5) {
+        self.minSharpness = minSharpness; self.minLuma = minLuma; self.maxLuma = maxLuma; self.minSeconds = minSeconds
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self), d = BadShotRule()
+        minSharpness = try c.decodeIfPresent(Double.self, forKey: .minSharpness) ?? d.minSharpness
+        minLuma = try c.decodeIfPresent(Double.self, forKey: .minLuma) ?? d.minLuma
+        maxLuma = try c.decodeIfPresent(Double.self, forKey: .maxLuma) ?? d.maxLuma
+        minSeconds = try c.decodeIfPresent(Double.self, forKey: .minSeconds) ?? d.minSeconds
+    }
+}
+
 public struct Rules: Codable, Sendable, Equatable {
     public var maxDuration: Double?
     /// Speech clean-up decided from the transcript before the silence cut; nil leaves the speech as recorded.
@@ -344,16 +366,17 @@ public struct Rules: Codable, Sendable, Equatable {
     public var color: ColorRule?
     public var transitions: TransitionRule?
     public var sfx: SFXRule?
+    public var badShots: BadShotRule?
 
     public init(maxDuration: Double? = nil, speechEdits: SpeechEditRule? = nil, silenceCut: SilenceCutRule? = nil, beatCut: BeatCutRule? = nil,
                 beatSnap: BeatSnapRule? = nil, punchIn: PunchInRule? = nil, captions: CaptionRule? = nil, duck: DuckRule? = nil, loudnessTarget: Double? = -14,
                 maxSilentClip: Double? = nil, hook: HookRule? = nil, callouts: CalloutRule? = nil, broll: BRollRule? = nil,
-                color: ColorRule? = nil, transitions: TransitionRule? = nil, sfx: SFXRule? = nil) {
+                color: ColorRule? = nil, transitions: TransitionRule? = nil, sfx: SFXRule? = nil, badShots: BadShotRule? = nil) {
         self.maxDuration = maxDuration; self.speechEdits = speechEdits; self.silenceCut = silenceCut; self.beatCut = beatCut; self.beatSnap = beatSnap
         self.punchIn = punchIn
         self.captions = captions; self.duck = duck; self.loudnessTarget = loudnessTarget; self.maxSilentClip = maxSilentClip
         self.hook = hook; self.callouts = callouts; self.broll = broll
-        self.color = color; self.transitions = transitions; self.sfx = sfx
+        self.color = color; self.transitions = transitions; self.sfx = sfx; self.badShots = badShots
     }
 }
 

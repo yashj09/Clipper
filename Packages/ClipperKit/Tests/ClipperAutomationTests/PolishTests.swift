@@ -158,3 +158,69 @@ func sfxAssets() -> [SoundEffect: MediaAsset] {
         #expect(DraftPipeline.run(input).timeline == plain.timeline)
     }
 }
+
+/// One sample a second from 0 to `seconds - 1`, sharp and well exposed except where `sample` says otherwise.
+func visual(_ seconds: Int, _ sample: (Int) -> (sharpness: Double?, luma: Double?) = { _ in (0.6, 0.5) }) -> VisualActivity {
+    VisualActivity(samples: (0..<seconds).map { t in
+        let s = sample(t)
+        return VisualSample(time: Double(t), change: 0, salient: nil, sharpness: s.sharpness, luma: s.luma)
+    }, sceneCuts: [])
+}
+
+func plays(_ t: Timeline, asset: AssetID, _ range: ClosedRange<Double>) -> Bool {
+    t.tracks[0].items.contains { item in
+        guard let ref = item.content.mediaRef, ref.asset == asset else { return false }
+        return ref.source.end.seconds > range.lowerBound + 0.01 && ref.source.start.seconds < range.upperBound - 0.01
+    }
+}
+
+@Suite struct BadShotTests {
+    @Test func aLongBlurOrDarkRunIsBadAShortOneIsNot() {
+        let blurry = ClipInput(asset: videoAsset("b", seconds: 12), analysis: AssetAnalysis(visual: visual(12) { t in
+            (3...5).contains(t) || t == 8 ? (0.05, 0.5) : (0.6, 0.5)
+        }))
+        #expect(Cutting.badRanges(blurry, rule: BadShotRule()) == [2.5...5.5])
+        let dark = ClipInput(asset: videoAsset("d", seconds: 12), analysis: AssetAnalysis(visual: visual(12) { t in
+            (6...7).contains(t) ? (0.6, 0.02) : t == 11 ? (0.6, 0.99) : (0.6, 0.5)
+        }))
+        #expect(Cutting.badRanges(dark, rule: BadShotRule()) == [5.5...7.5])
+        let unmeasured = ClipInput(asset: videoAsset("u", seconds: 12), analysis: AssetAnalysis(visual: visual(12) { _ in (nil, nil) }))
+        #expect(Cutting.badRanges(unmeasured, rule: BadShotRule()).isEmpty)
+    }
+
+    @Test func vlogCutsTheBlurFromSilentFootageButNotFromSpeech() throws {
+        let broll = videoAsset("broll", seconds: 10)
+        var input = talkingInput()
+        input.template = BuiltIns.vlog
+        input.template.rules.maxSilentClip = nil
+        let blurAt = { (t: Int) -> (sharpness: Double?, luma: Double?) in (3...5).contains(t) ? (0.05, 0.5) : (0.6, 0.5) }
+        input.clips[0].analysis.visual = visual(30, blurAt)
+        input.clips.append(ClipInput(asset: broll, analysis: AssetAnalysis(visual: visual(10, blurAt))))
+        let result = DraftPipeline.run(input)
+        #expect(!plays(result.timeline, asset: broll.id, 2.5...5.5))
+        #expect(plays(result.timeline, asset: broll.id, 0...2.5) && plays(result.timeline, asset: broll.id, 5.5...10))
+        // The speaker talks through their blurry 2.5–5.5 s, so it stays.
+        #expect(plays(result.timeline, asset: input.clips[0].asset.id, 2.5...5.5))
+        #expect(result.report.notes.contains("Skipped 1 blurry or dark shot (3.0s)"))
+        input.template.rules.badShots = nil
+        #expect(plays(DraftPipeline.run(input).timeline, asset: broll.id, 2.5...5.5))
+    }
+
+    @Test func montageCutsAroundTheBlur() {
+        var input = montageInput()
+        input.clips[1].analysis.visual = visual(12) { t in (4...7).contains(t) ? (0.05, 0.5) : (0.6, 0.5) }
+        let result = DraftPipeline.run(input)
+        #expect(!plays(result.timeline, asset: input.clips[1].asset.id, 3.5...7.5))
+        #expect(plays(result.timeline, asset: input.clips[1].asset.id, 0...3.5))
+        #expect(result.report.notes.contains("Skipped 1 blurry or dark shot (4.0s)"))
+    }
+
+    @Test func aClipThatIsMostlyBadIsKeptWhole() {
+        var input = montageInput()
+        input.clips[1].analysis.visual = visual(12) { t in t >= 2 ? (0.05, 0.5) : (0.6, 0.5) }
+        let result = DraftPipeline.run(input)
+        #expect(plays(result.timeline, asset: input.clips[1].asset.id, 4...12))
+        #expect(result.report.warnings.contains("shot1 is mostly blurry or badly exposed: kept all of it"))
+        #expect(!result.report.notes.contains { $0.hasPrefix("Skipped") })
+    }
+}

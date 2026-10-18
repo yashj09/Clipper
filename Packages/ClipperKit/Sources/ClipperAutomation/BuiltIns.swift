@@ -81,7 +81,7 @@ public enum BuiltIns {
         slots: [Slot(id: "clips", name: "Clips", role: .primary, reframe: .saliency, useAudio: false)],
         elements: [title("title-bold", seconds: 2)],
         rules: Rules(maxDuration: 30, beatCut: BeatCutRule(everyBeats: 4, minClip: 0.8), color: ColorRule(),
-                     transitions: TransitionRule(chapters: nil)),
+                     transitions: TransitionRule(chapters: nil), badShots: BadShotRule()),
         music: MusicPolicy(moods: ["upbeat", "energetic", "happy"], minBPM: 90, maxBPM: 140, gain: -4, fadeIn: 0, fadeOut: 1.5))
 
     public static let vlog = Template(
@@ -91,7 +91,7 @@ public enum BuiltIns {
         elements: [title("title-clean", seconds: 3)],
         rules: Rules(maxDuration: 90, silenceCut: SilenceCutRule(minGap: 0.7, padBefore: 0.15, padAfter: 0.25, speedUp: SpeedUpRule()),
                      beatSnap: BeatSnapRule(), captions: CaptionRule(style: "clean-subtitle"), duck: DuckRule(depth: 10), maxSilentClip: 4,
-                     broll: BRollRule(), color: ColorRule(), transitions: TransitionRule(montageEvery: nil)),
+                     broll: BRollRule(), color: ColorRule(), transitions: TransitionRule(montageEvery: nil), badShots: BadShotRule()),
         music: MusicPolicy(moods: ["inspiring", "chill", "happy", "cinematic"], minBPM: 70, maxBPM: 130, gain: -18))
 
     public static let templates: [Template] = [talkingHead, gameplay, montage, vlog]
