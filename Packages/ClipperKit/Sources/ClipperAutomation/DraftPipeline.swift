@@ -153,6 +153,12 @@ public enum DraftPipeline {
            let i = primaryItems.firstIndex(where: { segmentOf[$0.id] == segments[open.count] }) {
             primaryItems[i].transition = Transition(.dipToWhite, duration: RationalTime.frames(0.15, rate))
         }
+        let chapters = Speech.chapterMarkers(plans, clips: input.clips, items: primaryItems, rate: rate)
+        if let rule = rules.transitions {
+            let t = Visual.transitions(primaryItems, cuts: cuts, chapters: chapters.map(\.time), rule: rule, rate: rate)
+            primaryItems = t.items
+            if t.added > 0 { report.notes.append("Added \(t.added) transition\(t.added == 1 ? "" : "s")") }
+        }
         let duration = cursor
         if duration == .zero { report.warnings.append("Nothing to place: add clips to the '\(primary.name)' slot") }
         let spoken = Speech.timedWords(primaryItems, segments: segmentOf)
@@ -342,7 +348,7 @@ public enum DraftPipeline {
         if let open = coldOpen {
             timeline.markers.append(Marker(id: ids.uuid(), time: .zero, name: "Hook: “\(Hook.excerpt(open.text))”"))
         }
-        for chapter in Speech.chapterMarkers(plans, clips: input.clips, items: primaryItems, rate: rate) {
+        for chapter in chapters {
             timeline.markers.append(Marker(id: ids.uuid(), time: chapter.time, name: chapter.name))
         }
         timeline.markers.sort { $0.time < $1.time }

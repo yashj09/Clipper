@@ -264,6 +264,34 @@ public struct ColorRule: Codable, Sendable, Equatable {
     }
 }
 
+/// Transitions added where the footage jumps. Each part is off when nil.
+public struct TransitionRule: Codable, Sendable, Equatable {
+    /// Into the first item at or after each "Chapter: …" marker, when that item starts on a cut.
+    public var chapters: Transition.Kind?
+    public var chapterSeconds: Double
+    /// A cross dissolve on every N-th cut.
+    public var montageEvery: Int?
+    public var montageSeconds: Double
+    public init(chapters: Transition.Kind? = .dipToBlack, chapterSeconds: Double = 0.4, montageEvery: Int? = 4, montageSeconds: Double = 0.3) {
+        self.chapters = chapters; self.chapterSeconds = chapterSeconds; self.montageEvery = montageEvery; self.montageSeconds = montageSeconds
+    }
+
+    enum CodingKeys: String, CodingKey { case chapters, chapterSeconds, montageEvery, montageSeconds }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        chapters = c.contains(.chapters) ? try c.decodeIfPresent(Transition.Kind.self, forKey: .chapters) : .dipToBlack
+        chapterSeconds = try c.decodeIfPresent(Double.self, forKey: .chapterSeconds) ?? 0.4
+        montageEvery = c.contains(.montageEvery) ? try c.decodeIfPresent(Int.self, forKey: .montageEvery) : 4
+        montageSeconds = try c.decodeIfPresent(Double.self, forKey: .montageSeconds) ?? 0.3
+    }
+    /// Writes the parts even when nil, so "off" does not read back as the default.
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(chapters, forKey: .chapters); try c.encode(chapterSeconds, forKey: .chapterSeconds)
+        try c.encode(montageEvery, forKey: .montageEvery); try c.encode(montageSeconds, forKey: .montageSeconds)
+    }
+}
+
 public struct Rules: Codable, Sendable, Equatable {
     public var maxDuration: Double?
     /// Speech clean-up decided from the transcript before the silence cut; nil leaves the speech as recorded.
@@ -283,16 +311,17 @@ public struct Rules: Codable, Sendable, Equatable {
     /// With it, `.broll` slots hold candidates for cutaways instead of being laid out by their fill.
     public var broll: BRollRule?
     public var color: ColorRule?
+    public var transitions: TransitionRule?
 
     public init(maxDuration: Double? = nil, speechEdits: SpeechEditRule? = nil, silenceCut: SilenceCutRule? = nil, beatCut: BeatCutRule? = nil,
                 beatSnap: BeatSnapRule? = nil, punchIn: PunchInRule? = nil, captions: CaptionRule? = nil, duck: DuckRule? = nil, loudnessTarget: Double? = -14,
                 maxSilentClip: Double? = nil, hook: HookRule? = nil, callouts: CalloutRule? = nil, broll: BRollRule? = nil,
-                color: ColorRule? = nil) {
+                color: ColorRule? = nil, transitions: TransitionRule? = nil) {
         self.maxDuration = maxDuration; self.speechEdits = speechEdits; self.silenceCut = silenceCut; self.beatCut = beatCut; self.beatSnap = beatSnap
         self.punchIn = punchIn
         self.captions = captions; self.duck = duck; self.loudnessTarget = loudnessTarget; self.maxSilentClip = maxSilentClip
         self.hook = hook; self.callouts = callouts; self.broll = broll
-        self.color = color
+        self.color = color; self.transitions = transitions
     }
 }
 
