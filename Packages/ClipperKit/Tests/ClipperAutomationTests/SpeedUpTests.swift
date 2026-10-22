@@ -92,6 +92,28 @@ import Testing
         #expect(try ClipperJSON.decode(SilenceCutRule.self, from: Data(old.utf8)).speedUp == nil)
         let rule = BuiltIns.vlog.rules.silenceCut!
         #expect(try ClipperJSON.decode(SilenceCutRule.self, from: ClipperJSON.encode(rule)) == rule)
+        // Empty objects take the defaults, like every other rule.
+        let bare = try ClipperJSON.decode(Rules.self, from: Data(#"{"beatSnap": {}, "silenceCut": {"minGap": 0.5, "padBefore": 0.1, "padAfter": 0.2, "removeFillers": true, "speedUp": {}}}"#.utf8))
+        #expect(bare.beatSnap == BeatSnapRule() && bare.silenceCut?.speedUp == SpeedUpRule())
+    }
+
+    @Test func aColdOpenLeavesNoFastPauseOnEitherSideOfTheJump() throws {
+        // Without a hook: pauses after sentences 1 and 2 play fast (the one after sentence 0 holds an "Um", so it is cut).
+        var input = vlogInput(pauses: [1.0, 1.0, 1.0, 2.5])
+        #expect(refs(DraftPipeline.run(input)).map(\.ref.speed) == [1, 1, 2.5, 1, 2.5, 1])
+        // Sentence 1 as the hook: the fast pause that followed it would now run into the one after sentence 0's
+        // neighbour, so it goes; the pause after sentence 2 stays fast.
+        input.template.rules.hook = HookRule(maxSeconds: 10, minImportance: 0)
+        input.clips[0].analysis.brief = TranscriptBrief(model: "m", hookSentence: 1)
+        let r = DraftPipeline.run(input)
+        #expect(r.report.notes.contains { $0.hasPrefix("Cold open") })
+        let speeds = refs(r).map(\.ref.speed)
+        #expect(speeds == [1, 1, 1, 2.5, 1], "\(speeds)")
+        let words = input.clips[0].analysis.transcript!.words
+        for w in words where !w.isFiller {
+            let mid = (w.start + w.end) / 2
+            #expect(refs(r).filter { $0.ref.source.start.seconds <= mid && mid < $0.ref.source.end.seconds }.count == 1, "\(w.text) plays once")
+        }
     }
 
     @Test(arguments: stride(from: 0.1, to: 0.2, by: 0.01).map { $0 })

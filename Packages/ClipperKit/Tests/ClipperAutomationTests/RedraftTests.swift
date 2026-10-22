@@ -87,6 +87,23 @@ import Testing
         #expect(captionItems.filter { $0.range.overlaps(pages[0].range) }.count == 1)
     }
 
+    @Test func redraftKeepsTheUsersMarkersAndReplacesTheDrafts() throws {
+        var input = talkingInput()
+        input.clips[0].analysis.brief = TranscriptBrief(model: "m", chapters: [
+            .init(start: 0.1, title: "Intro"), .init(start: input.clips[0].analysis.transcript!.words[19].start, title: "Local"),
+        ])
+        var tl = DraftPipeline.run(input).timeline
+        #expect(tl.markers.map(\.name) == ["Chapter: Intro", "Chapter: Local"])
+        tl.markers.append(Marker(time: RationalTime(seconds: 4), name: "Fix the audio here"))
+        input.clips[0].analysis.brief?.chapters[1].title = "Runs locally"
+        let out = Redraft.merge(tl, into: DraftPipeline.run(input).timeline).timeline
+        #expect(out.markers.map(\.name) == ["Chapter: Intro", "Fix the audio here", "Chapter: Runs locally"])
+        #expect(out.markers.map(\.origin.isAuto) == [true, false, true])
+        // Markers saved before they had an origin are the user's.
+        let legacy = try ClipperJSON.decode(Marker.self, from: Data(#"{"id":"9A4B8B5E-0C7B-4C7B-9A8B-1B2C3D4E5F60","time":1,"name":"x"}"#.utf8))
+        #expect(legacy.origin == .user)
+    }
+
     @Test func sameInputsWithNothingKeptReproduceTheDraft() {
         let tl = DraftPipeline.run(talkingInput()).timeline
         let result = Redraft.merge(tl, into: DraftPipeline.run(talkingInput()).timeline)

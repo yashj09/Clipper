@@ -102,7 +102,7 @@ func montageInput(clips: Int = 3, seconds: Double = 12) -> DraftInput {
 }
 
 func sfxAssets() -> [SoundEffect: MediaAsset] {
-    let lengths: [SoundEffect: Double] = [.whoosh: 0.35, .pop: 0.07, .click: 0.012, .ding: 0.6, .bleep: 0.25]
+    let lengths: [SoundEffect: Double] = [.whoosh: 0.35, .pop: 0.07, .click: 0.012, .ding: 0.6, .bleep: 2.0]
     return Dictionary(uniqueKeysWithValues: SoundEffect.allCases.map { e in
         var g = IDGenerator(seed: stableHash("sfx-test|\(e.rawValue)"))
         return (e, MediaAsset(id: g.uuid(), key: AssetKey("sfx-\(e.rawValue)"), name: e.rawValue, url: URL(fileURLWithPath: "/tmp/\(e.rawValue).wav"),
@@ -284,9 +284,13 @@ func captionText(_ t: Timeline) -> String {
         #expect(bleep.content.mediaRef?.asset == input.sfx[.bleep]!.id)
         #expect(result.addedAssets.filter { $0.tags == ["sfx"] }.map(\.id) == [input.sfx[.bleep]!.id])
         #expect(result.report.notes.contains("Bleeped 1 word"))
-        // It starts where the dip does, within a frame.
+        // It starts where the dip does, within a frame, and lasts the whole silenced stretch.
         let primary = result.timeline.tracks[0].items.first { $0.range.contains(bleep.start) }!
         #expect(primary.gain.value(at: bleep.start - primary.start + RationalTime(value: 1, scale: 30)) <= -59.9)
+        let word = try #require(input.clips[0].analysis.transcript!.words.first { $0.text == "fucking" })
+        let frame = result.timeline.canvas.frameRate.frameDuration.seconds
+        #expect(bleep.range.duration.seconds >= word.end - word.start + 0.06 - 2 * frame, "\(bleep.range.duration.seconds)")
+        #expect(bleep.fadeOut > .zero)
     }
 
     @Test func cleanSpeechOrNoRuleLeavesTheDraftAlone() {

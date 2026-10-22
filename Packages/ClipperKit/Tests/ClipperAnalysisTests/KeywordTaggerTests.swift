@@ -26,6 +26,14 @@ private func transcript(_ text: String, locale: String = "en-US") -> Transcript 
         #expect(tags.tags.map(\.word) == tags.tags.map(\.word).sorted())
     }
 
+    @Test func anExclaimedNounIsStillANoun() {
+        let t = transcript("It cost three hundred dollars! Thanks! WOW")
+        let byWord = Dictionary(KeywordTagger.tag(t).tags.map { (t.words[$0.word].text, $0) }, uniquingKeysWith: { a, _ in a })
+        #expect(byWord["dollars!"]?.kind == .noun && byWord["dollars!"]?.emoji == "💵")
+        #expect(byWord["Thanks!"]?.kind == .emphasis)
+        #expect(byWord["WOW"]?.kind == .emphasis)
+    }
+
     @Test func vagueNounsAndShortNounsWithoutEmojiAreSkipped() {
         let t = transcript("I bought a thing and a car for a bit of fun")
         let lemmas = Set(KeywordTagger.tag(t).tags.map(\.lemma))

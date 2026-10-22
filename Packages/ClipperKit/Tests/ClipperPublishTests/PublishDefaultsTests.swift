@@ -52,6 +52,15 @@ import Testing
         #expect(PublishDefaults.timestamp(3723.9) == "1:02:03")
     }
 
+    @Test func aShortChapterFoldsIntoTheOneBefore() {
+        // 25 s "C" comes 5 s after "B": YouTube would reject the list, so "B" runs on to "D".
+        let lines = PublishDefaults.chapterLines(timeline(chapters: [(0, "A"), (20, "B"), (25, "C"), (40, "D")]).markers, duration: 60)
+        #expect(lines == ["0:00 A", "0:20 B", "0:40 D"])
+        // A cold open's chapter 3 s in and its "Intro" 8 s later: one chapter at 0:00, the list survives.
+        let hooked = PublishDefaults.chapterLines(timeline(chapters: [(3.4, "Pricing"), (8, "Intro"), (30, "Setup"), (45, "Wrap")]).markers, duration: 60)
+        #expect(hooked == ["0:00 Pricing", "0:30 Setup", "0:45 Wrap"])
+    }
+
     @Test func youTubeCapCutsProseBeforeChaptersAndNeverCredits() throws {
         let prose = String(repeating: "Long words here. ", count: 400)
         let tl = timeline(chapters: [(15, "Setup"), (40, "Build"), (75, "Ship"), (100, "Wrap up")],

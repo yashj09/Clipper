@@ -5,14 +5,18 @@ import Foundation
 /// Synthesised sound effects: no downloads, no licences. Deterministic, so every library gets the same files.
 public enum SoundEffects {
     public static let sampleRate = 48_000.0
+    /// Bumped when an effect's sound or length changes. Files and asset keys carry it, so a library made with an
+    /// earlier version keeps its old assets (old drafts still play) and gets the new ones alongside.
+    public static let version = 2
 
-    /// Writes `<directory>/<name>.wav` (48 kHz mono 16-bit) for each effect that has no file yet, and returns an asset
-    /// per effect with an ID derived from its name, so drafts reference the same asset in every run.
+    /// Writes `<directory>/<name>-v<version>.wav` (48 kHz mono 16-bit) for each effect that has no file yet, and
+    /// returns an asset per effect with an ID derived from its name and version, so drafts reference the same asset
+    /// in every run.
     public static func ensure(in directory: URL) throws -> [SoundEffect: MediaAsset] {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         var out: [SoundEffect: MediaAsset] = [:]
         for effect in SoundEffect.allCases {
-            let url = directory.appending(path: "\(effect.rawValue).wav", directoryHint: .notDirectory)
+            let url = directory.appending(path: "\(effect.rawValue)-v\(version).wav", directoryHint: .notDirectory)
             let samples = render(effect)
             if !FileManager.default.fileExists(atPath: url.path) { try write(samples, to: url) }
             out[effect] = asset(effect, url: url, frames: samples.count)
@@ -22,15 +26,16 @@ public enum SoundEffects {
 
     static func asset(_ effect: SoundEffect, url: URL, frames: Int) -> MediaAsset {
         var hash: UInt64 = 0xcbf2_9ce4_8422_2325
-        for b in "sfx|\(effect.rawValue)".utf8 { hash ^= UInt64(b); hash = hash &* 0x100_0000_01b3 }
+        for b in "sfx|\(effect.rawValue)|v\(version)".utf8 { hash ^= UInt64(b); hash = hash &* 0x100_0000_01b3 }
         var g = IDGenerator(seed: hash)
-        return MediaAsset(id: g.uuid(), key: AssetKey("sfx-\(effect.rawValue)"), name: effect.rawValue.capitalized, url: url,
+        return MediaAsset(id: g.uuid(), key: AssetKey("sfx-\(effect.rawValue)-v\(version)"), name: effect.rawValue.capitalized, url: url,
                           info: MediaInfo(kind: .audio, duration: RationalTime(value: Int64(frames), scale: Int32(sampleRate)),
                                           audioChannels: 1, audioSampleRate: sampleRate),
                           tags: ["sfx"])
     }
 
     /// Written to a temporary file and moved into place, so an interrupted write never leaves a truncated effect.
+    /// Another process writing the same file first wins: the content is identical.
     static func write(_ samples: [Float], to url: URL) throws {
         let settings: [String: Any] = [AVFormatIDKey: kAudioFormatLinearPCM, AVSampleRateKey: sampleRate, AVNumberOfChannelsKey: 1,
                                        AVLinearPCMBitDepthKey: 16, AVLinearPCMIsFloatKey: false, AVLinearPCMIsBigEndianKey: false]
@@ -43,7 +48,11 @@ public enum SoundEffects {
             samples.withUnsafeBufferPointer { buffer.floatChannelData![0].update(from: $0.baseAddress!, count: samples.count) }
             try file.write(from: buffer)
         }
-        try FileManager.default.moveItem(at: temp, to: url)
+        do {
+            try FileManager.default.moveItem(at: temp, to: url)
+        } catch {
+            guard FileManager.default.fileExists(atPath: url.path) else { throw error }
+        }
     }
 
     /// The effect's samples, peak-normalised to −6 dBFS.
@@ -96,8 +105,8 @@ public enum SoundEffects {
                 return tone * exp(-t / 0.15) * min(1, t / 0.002) * min(1, Double(n - i) / (0.02 * sr))
             }
         case .bleep:
-            // 1 kHz with 10 ms ramps.
-            let n = Int(0.25 * sr), ramp = 0.01 * sr
+            // 1 kHz with 10 ms ramps, long enough to cover any silenced stretch; the draft cuts it to the stretch.
+            let n = Int(2.0 * sr), ramp = 0.01 * sr
             x = (0..<n).map { i in sin(2 * Double.pi * 1000 * Double(i) / sr) * min(1, Double(i) / ramp, Double(n - i) / ramp) }
         }
         let peak = x.reduce(0) { max($0, abs($1)) }

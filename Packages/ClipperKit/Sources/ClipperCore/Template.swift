@@ -107,6 +107,12 @@ public struct SpeedUpRule: Codable, Sendable, Equatable {
     /// Playback rate for the kept pause.
     public var rate: Double
     public init(maxPause: Double = 1.5, rate: Double = 2.5) { self.maxPause = maxPause; self.rate = rate }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self), d = SpeedUpRule()
+        maxPause = try c.decodeIfPresent(Double.self, forKey: .maxPause) ?? d.maxPause
+        rate = try c.decodeIfPresent(Double.self, forKey: .rate) ?? d.rate
+    }
 }
 
 public struct BeatCutRule: Codable, Sendable, Equatable {
@@ -124,6 +130,11 @@ public struct BeatSnapRule: Codable, Sendable, Equatable {
     /// Max distance (seconds) a speech cut may move to land on a beat.
     public var tolerance: Double
     public init(tolerance: Double = 0.15) { self.tolerance = tolerance }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        tolerance = try c.decodeIfPresent(Double.self, forKey: .tolerance) ?? BeatSnapRule().tolerance
+    }
 }
 
 public struct PunchInRule: Codable, Sendable, Equatable {

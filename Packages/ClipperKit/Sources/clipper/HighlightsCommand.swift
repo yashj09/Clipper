@@ -97,6 +97,10 @@ struct LLMOptions: ParsableArguments {
     @Option(help: "Local LLM: ollama, lmstudio, mlx, or a base URL like http://localhost:8080/v1.") var llm: String?
     @Option(help: "Model name for --llm.") var model: String?
 
+    func validate() throws {
+        if model != nil, llm == nil { throw ValidationError("--model needs --llm") }
+    }
+
     /// nil without `--llm`.
     func endpoint() throws -> LLMEndpoint? {
         guard let llm else { return nil }

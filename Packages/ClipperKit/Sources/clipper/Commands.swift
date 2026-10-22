@@ -76,14 +76,16 @@ struct Draft: AsyncParsableCommand {
         var analysis: [AssetID: AssetAnalysis] = [:]
         var slotOrder: [String?] = []
         for (_, slot) in clips where !slotOrder.contains(slot) { slotOrder.append(slot) }
+        // Only the main clips' briefs shape the draft, so only they are transcribed for one.
+        let isMain = { (slot: String?) in slot == nil || slot == template.primarySlot?.id }
         for slot in slotOrder {
             var kinds = DraftPipeline.analysisKinds(for: template, slot: slot)
-            if endpoint != nil { kinds.insert(.transcript) }
+            if endpoint != nil, isMain(slot) { kinds.insert(.transcript) }
             guard !kinds.isEmpty else { continue }
             let found = try await s.analyze(clips.filter { $0.1 == slot }.map(\.0), kinds: kinds)
             analysis.merge(found) { first, _ in first }
         }
-        if let endpoint { await s.addBriefs(to: &analysis, assets: clips.map(\.0), endpoint: endpoint, print: brief) }
+        if let endpoint { await s.addBriefs(to: &analysis, assets: clips.filter { isMain($0.1) }.map(\.0), endpoint: endpoint, print: brief) }
         let draftTitle = title ?? primary.first.flatMap { analysis[$0.id]?.brief?.title }
         if title == nil, let draftTitle { Console.line("Title from \(endpoint?.model ?? "LLM"): “\(draftTitle)”") }
         let pool = try s.musicPool()
@@ -142,7 +144,7 @@ struct Analyze: AsyncParsableCommand {
 
     func run() async throws {
         let s = try Services(lib)
-        let selected = try s.assets(matching: assets).filter { !$0.tags.contains("music") }
+        let selected = try s.assets(matching: assets).filter(\.isUserMedia)
         let k = Set(kinds.split(separator: ",").compactMap { AnalysisKind(rawValue: String($0)) })
         let results = try await s.analyze(selected, kinds: k)
         if transcript {
@@ -164,6 +166,33 @@ struct Export: AsyncParsableCommand {
         let p = try s.findProject(project)
         guard p.timelines.indices.contains(timeline) else { throw ValidationErrorText("Project has \(p.timelines.count) timeline(s)") }
         try await s.export(p.timelines[timeline], project: p.name, preset: preset, to: output)
+    }
+}
+
+struct Tag: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "Tag library media, e.g. \"b-roll\" so drafts can cut away to it (`draft --broll-tag`, or the app's automatic B-roll).",
+        discussion: "Example: clipper tag desk.mov office.mov b-roll\n         clipper tag desk.mov b-roll --remove")
+    @OptionGroup var lib: LibraryOptions
+    @Argument(help: "Asset names or id prefixes, then the tag.") var arguments: [String]
+    @Flag(help: "Remove the tag instead.") var remove = false
+
+    func validate() throws {
+        if arguments.count < 2 { throw ValidationError("Expected at least one asset and a tag: clipper tag <asset>... <tag>") }
+    }
+
+    func run() async throws {
+        let s = try Services(lib)
+        let tag = arguments[arguments.count - 1].trimmingCharacters(in: .whitespaces).lowercased()
+        guard !tag.isEmpty, tag != "music", tag != "sfx" else { throw ValidationErrorText("“\(tag)” is not a tag you can set") }
+        let selected = try s.assets(matching: Array(arguments.dropLast())).filter(\.isUserMedia)
+        guard !selected.isEmpty else { throw ValidationErrorText("No library media matches \(arguments.dropLast().joined(separator: ", "))") }
+        for var asset in selected {
+            let had = asset.tags.contains { $0.lowercased() == tag }
+            if remove { asset.tags.removeAll { $0.lowercased() == tag } } else if !had { asset.tags.append(tag) }
+            if had != !remove { try s.library.updateAsset(asset) }
+            Console.line("\(remove ? "Untagged" : "Tagged") \(asset.name): \(asset.tags.isEmpty ? "(no tags)" : asset.tags.joined(separator: ", "))")
+        }
     }
 }
 
@@ -272,7 +301,7 @@ struct Info: AsyncParsableCommand {
         let s = try Services(lib)
         let assets = try s.library.assets()
         Console.line("Library: \(s.library.url.path)")
-        Console.line("Media: \(assets.filter { !$0.tags.contains("music") }.count)  Music: \(try s.library.music().count)  Projects: \(try s.library.projects().count)")
+        Console.line("Media: \(assets.filter(\.isUserMedia).count)  Music: \(try s.library.music().count)  Projects: \(try s.library.projects().count)")
         Console.line("Exports go to: \(try s.library.exportFolder().path)")
         Console.line("FFmpeg (import fallback): \(Transcoder.ffmpegURL?.path ?? "not found")")
     }

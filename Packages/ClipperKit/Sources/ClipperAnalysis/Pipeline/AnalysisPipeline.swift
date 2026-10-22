@@ -83,7 +83,7 @@ public actor AnalysisPipeline {
         /// Decodes a cached artifact into its `Output` case.
         var decode: @Sendable (Data) -> Output?
 
-        init<T: Decodable>(version: Int, applies: @escaping @Sendable (MediaInfo) -> Bool,
+        init<T: Decodable & Sendable>(version: Int, applies: @escaping @Sendable (MediaInfo) -> Bool,
                            id: @escaping @Sendable (AnalysisOptions) -> String,
                            output: @escaping @Sendable (T) -> Output) {
             self.version = version; self.applies = applies; self.id = id

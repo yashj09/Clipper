@@ -24,9 +24,11 @@ public struct TranscriptBriefer: Sendable {
         self.endpoint = endpoint; self.cache = cache; self.chunkWords = max(1, chunkWords); self.session = session
     }
 
-    /// The model plus a digest of what was sent: the brief's sentence indices only fit the transcript it was made from.
+    /// The model plus a digest of the model and what was sent: the brief's sentence indices and chapter times only
+    /// fit the transcript it was made from.
     public func analyzerID(_ transcript: Transcript, context: String?) -> String {
-        let sent = Self.sentences(transcript).map(\.text).joined(separator: "\n") + "\u{0}" + (context ?? "")
+        let sentences = Self.sentences(transcript).map { String(format: "%.3f %@", $0.start, $0.text) }.joined(separator: "\n")
+        let sent = endpoint.model + "\u{0}" + sentences + "\u{0}" + (context ?? "")
         let digest = SHA256.hash(data: Data(sent.utf8)).prefix(6).map { String(format: "%02x", $0) }.joined()
         // Model ids carry ":" (Ollama tags) and "/" (LM Studio, mlx), which the library refuses in a file name.
         let model = String(endpoint.model.map { $0 == ":" || $0 == "/" || $0 == "\\" ? "_" : $0 })
@@ -51,6 +53,7 @@ public struct TranscriptBriefer: Sendable {
 
         var brief = TranscriptBrief(model: endpoint.model)
         var final: Reply
+        var candidates = Set(sentences.indices)
         if chunks.count == 1 {
             final = try await llm.complete(system: Self.wholePrompt,
                                            user: Self.sentencesMessage(sentences, context: context),
@@ -61,20 +64,26 @@ public struct TranscriptBriefer: Sendable {
             brief.chapters = Self.chapters(final.chapters, in: sentences.indices, sentences)
         } else {
             var summaries: [String] = []
+            // One per chunk; a chunk the model miscounted leaves the whole transcript unscored.
+            var scores: [[Double]] = []
             for (n, chunk) in chunks.enumerated() {
                 let part = try await llm.complete(system: Self.chunkPrompt,
                                                   user: Self.sentencesMessage(Array(sentences[chunk]), context: context),
                                                   schema: Self.schema("transcript_part", Self.chunkFields)) {
                     Self.reply($0, requiring: ["summary", "importance"])
                 }
-                brief.sentenceImportance += Self.importances(part.importance, count: chunk.count)
+                scores.append(Self.importances(part.importance, count: chunk.count))
                 brief.chapters += Self.chapters(part.chapters, in: chunk, sentences)
                 summaries.append(part.summary.map(LocalLLMRanker.oneLine) ?? "")
                 progress?(Double(n + 1) / Double(chunks.count + 1))
             }
-            let hooks = chunks.flatMap { chunk in
-                chunk.sorted { brief.sentenceImportance[$0] > brief.sentenceImportance[$1] }.prefix(Self.hooksPerChunk)
+            if scores.allSatisfy({ !$0.isEmpty }) { brief.sentenceImportance = scores.flatMap { $0 } }
+            // Each chunk's strongest sentences, or its first ones when it went unscored.
+            let hooks = zip(chunks, scores).flatMap { chunk, score in
+                chunk.sorted { (score.isEmpty ? 0 : score[$0 - chunk.lowerBound]) > (score.isEmpty ? 0 : score[$1 - chunk.lowerBound]) }
+                    .prefix(Self.hooksPerChunk)
             }.sorted()
+            candidates = Set(hooks)
             final = try await llm.complete(system: Self.finalPrompt,
                                            user: Self.finalMessage(summaries, hooks: hooks.map { sentences[$0] },
                                                                    context: context),
@@ -84,7 +93,7 @@ public struct TranscriptBriefer: Sendable {
             brief.chapters = Self.uniqueByStart(brief.chapters)
         }
         brief.title = final.title.map(Self.cleanTitle)?.nilIfEmpty
-        brief.hookSentence = final.hook.flatMap { sentences.indices.contains($0) ? $0 : nil }
+        brief.hookSentence = final.hook.flatMap { candidates.contains($0) ? $0 : nil }
         brief.description = final.description?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         brief.hashtags = Self.hashtags(final.hashtags)
 
@@ -158,11 +167,14 @@ public struct TranscriptBriefer: Sendable {
         }
     }
 
-    /// Clamped to 0…1, one per sentence. Models miscount long arrays: missing tail entries score 0 and extras are
-    /// dropped, rather than discarding the whole answer.
+    /// Clamped to 0…1, one per sentence, or none. Models miscount long arrays: extras are dropped, and a tail missing
+    /// at most one entry in ten gets the median of the rest, so an unscored sentence reads as ordinary rather than
+    /// skippable. A shorter or absent answer scores nothing: a draft trimmed by made-up zeros would drop real content.
     static func importances(_ raw: [Double], count: Int) -> [Double] {
         let clamped = raw.prefix(count).map { $0.isFinite ? min(max($0, 0), 1) : 0 }
-        return clamped + Array(repeating: 0, count: count - clamped.count)
+        guard !clamped.isEmpty, count - clamped.count <= max(1, count / 10) else { return [] }
+        let sorted = clamped.sorted()
+        return clamped + Array(repeating: sorted[sorted.count / 2], count: count - clamped.count)
     }
 
     /// Chapters whose sentence lies in `range`, timed at that sentence's start, in time order.

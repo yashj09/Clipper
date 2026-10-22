@@ -131,7 +131,7 @@ private struct SlotEditor: View {
 
     private var emptyHint: String {
         slot.role == .broll && model.settings.automation.autoBRoll
-            ? "Drop clips here, or leave empty to use clips named or tagged “b-roll”" : "Drop clips here or use “Add clip”"
+            ? "Drop clips here, or leave empty to use clips named “b-roll” (or tagged with `clipper tag`)" : "Drop clips here or use “Add clip”"
     }
 }
 
@@ -230,10 +230,11 @@ struct SettingsView: View {
                 Toggle("Captions by default", isOn: $model.settings.automation.captions)
                 Toggle("Music by default", isOn: $model.settings.automation.music)
                 Toggle("Face tracking (reframing)", isOn: $model.settings.automation.faceTracking)
-                Toggle("B-roll from clips named or tagged “b-roll”", isOn: $model.settings.automation.autoBRoll)
+                Toggle("B-roll from clips named “b-roll” (or tagged with `clipper tag`)", isOn: $model.settings.automation.autoBRoll)
                 TextField("Speech language", text: $model.settings.automation.transcriptionLocale)
-                Section("Local LLM (optional, for ranking highlights)") {
-                    Toggle("Re-rank highlights with a local model", isOn: $model.settings.automation.useLLM)
+                Section("Local LLM (optional)") {
+                    Toggle("Use a local model for drafts (title, opening hook, chapters, trimming) and to rank highlights",
+                           isOn: $model.settings.automation.useLLM)
                     TextField("Server (OpenAI-compatible)", text: $model.settings.automation.llmBaseURL)
                     HStack {
                         TextField("Model", text: $model.settings.automation.llmModel)

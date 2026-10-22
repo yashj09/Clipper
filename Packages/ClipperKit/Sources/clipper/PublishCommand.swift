@@ -51,7 +51,8 @@ struct Publish: AsyncParsableCommand {
         }
 
         /// The validated post these options describe (not yet queued).
-        func makePost(_ s: Services) throws -> ScheduledPost {
+        /// `quiet` skips the "from the draft" lines, for a caller that prints the whole post itself.
+        func makePost(_ s: Services, quiet: Bool = false) throws -> ScheduledPost {
             let p = try s.findProject(project)
             guard p.timelines.indices.contains(timeline) else { throw ValidationErrorText("Project has \(p.timelines.count) timeline(s)") }
             let platforms = try to.split(separator: ",").map { raw -> Platform in
@@ -65,8 +66,8 @@ struct Publish: AsyncParsableCommand {
                 throw ValidationErrorText("Unknown preset. Try: \(ExportPreset.builtIn.map(\.id).joined(separator: ", "))")
             }
             let defaults = PublishDefaults.make(timeline: p.timelines[timeline])
-            if description == nil { Console.line("Description (from the draft):\n\(defaults.description.isEmpty ? "(none)" : defaults.description)") }
-            if tags == nil { Console.line("Tags (from the draft): \(defaults.tags.isEmpty ? "(none)" : defaults.tags.joined(separator: ", "))") }
+            if description == nil, !quiet { Console.line("Description (from the draft):\n\(defaults.description.isEmpty ? "(none)" : defaults.description)") }
+            if tags == nil, !quiet { Console.line("Tags (from the draft): \(defaults.tags.isEmpty ? "(none)" : defaults.tags.joined(separator: ", "))") }
             let post = ScheduledPost(projectID: p.id, timelineIndex: timeline, platforms: platforms,
                                      title: title ?? defaults.title, description: description ?? defaults.description,
                                      tags: tags.map { $0.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty } }
@@ -282,14 +283,15 @@ struct Publish: AsyncParsableCommand {
         @Flag(help: "Print what would be sent (title, description with credits, tags) without exporting or uploading.") var dryRun = false
 
         func run() async throws {
-            let optional = [("--title", title), ("--description", description), ("--tags", tags)].flatMap { name, value in value.map { [name, $0] } ?? [] }
+            // "--name=value", so a description starting with "-" is a value, not an option.
+            let optional = [("--title", title), ("--description", description), ("--tags", tags)].compactMap { name, value in value.map { "\(name)=\($0)" } }
             var schedule = try Schedule.parse([project, "--timeline", String(timeline), "--to", to, "--at", "now",
                                                "--visibility", visibility, "--preset", preset] + optional)
             schedule.lib = lib
             let s = try Services(lib)
             let q = Publish.queue(s)
             // Run exactly the post created here (never pick one out of the queue).
-            let post = try schedule.makePost(s)
+            let post = try schedule.makePost(s, quiet: dryRun)
             if dryRun {
                 let attributions = try s.library.loadProject(post.projectID).timelines[post.timelineIndex].attributions
                 let request = PublishRequest(file: URL(fileURLWithPath: "\(post.title).mp4"), title: post.title, description: post.description,

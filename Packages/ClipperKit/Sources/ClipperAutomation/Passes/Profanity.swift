@@ -42,7 +42,7 @@ extension Visual {
         return (out, spans, profane.count)
     }
 
-    /// A bleep over each silenced span, as long as the span or the effect, whichever is shorter.
+    /// A bleep over each silenced span, as long as the span (the effect runs 2 s, longer than any silenced word).
     static func bleeps(_ spans: [(Double, Double)], asset: MediaAsset, duration: Double, rate: FrameRate, ids: inout IDGenerator) -> [Item] {
         spans.compactMap { s in
             // Near speech level: the effect peaks at −6 dBFS.

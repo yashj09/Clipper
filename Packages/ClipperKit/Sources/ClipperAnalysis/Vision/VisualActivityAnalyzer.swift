@@ -210,6 +210,9 @@ public struct VisualActivityAnalyzer: Sendable {
         let g = AVAssetImageGenerator(asset: asset)
         g.appliesPreferredTrackTransform = true
         g.maximumSize = CGSize(width: maximumSize, height: maximumSize)
+        // HDR frames tone-mapped as the BT.709 renderer shows them, so HLG white is not read as mid-grey nor PQ
+        // highlights as blown out.
+        g.dynamicRangePolicy = .forceSDR
         let tol = CMTime(seconds: max(0, tolerance), preferredTimescale: 600)
         g.requestedTimeToleranceBefore = tol
         g.requestedTimeToleranceAfter = tol
@@ -231,10 +234,14 @@ public struct VisualActivityAnalyzer: Sendable {
     struct FrameMeasure: Sendable, Equatable {
         var luma: Double, p01: Double, p99: Double, saturation: Double
         var r: Double, g: Double, b: Double
+        /// How much of the frame's Laplacian energy a 3×3 box blur removes, 0…1. A sharp edge loses nearly all of it
+        /// and a soft one little, whatever the scene holds: a slide, a wall or the sky with one crisp edge reads
+        /// sharp, and a defocused busy scene reads soft. A frame with no edges at all reads 0.
         var sharpness: Double
 
-        /// `VisualSample.sharpness` = v / (v + sharpnessReference) for a Laplacian variance v in 8-bit units².
-        static let sharpnessReference = 500.0
+        /// Laplacian variance (8-bit units²) at which a frame counts as half flat. Below it the only "edges" left are
+        /// the one-level steps 8-bit quantisation leaves in a smooth gradient, which the blur ratio would read as sharp.
+        static let edgeFloor = 1.0
 
         init?(_ image: CGImage) {
             let w = image.width, h = image.height
@@ -266,17 +273,29 @@ public struct VisualActivityAnalyzer: Sendable {
                 sumR += Int(r); sumG += Int(g); sumB += Int(b)
                 sumChroma += Int(max(r, g, b) - min(r, g, b))
             }
-            var count = 0.0, sum = 0.0, sq = 0.0
-            if w >= 3 && h >= 3 {
+            var sharp = 0.0
+            if w >= 5 && h >= 5 {
+                var blurred = y
                 for row in 1..<(h - 1) {
                     for col in 1..<(w - 1) {
                         let i = row * w + col
-                        let lap = Double(4 * y[i] - y[i - 1] - y[i + 1] - y[i - w] - y[i + w])
-                        count += 1; sum += lap; sq += lap * lap
+                        blurred[i] = (y[i - w - 1] + y[i - w] + y[i - w + 1] + y[i - 1] + y[i] + y[i + 1] + y[i + w - 1] + y[i + w] + y[i + w + 1]) / 9
                     }
                 }
+                func laplacianVariance(_ p: [Float]) -> Double {
+                    var count = 0.0, sum = 0.0, sq = 0.0
+                    for row in 2..<(h - 2) {
+                        for col in 2..<(w - 2) {
+                            let i = row * w + col
+                            let lap = Double(4 * p[i] - p[i - 1] - p[i + 1] - p[i - w] - p[i + w])
+                            count += 1; sum += lap; sq += lap * lap
+                        }
+                    }
+                    return max(0, sq / count - (sum / count) * (sum / count))
+                }
+                let edges = laplacianVariance(y)
+                if edges > 0 { sharp = max(0, 1 - laplacianVariance(blurred) / edges) * edges / (edges + Self.edgeFloor) }
             }
-            let variance = count > 0 ? max(0, sq / count - (sum / count) * (sum / count)) : 0
             func percentile(_ p: Double) -> Double {
                 var seen = 0
                 for (level, k) in histogram.enumerated() {
@@ -290,7 +309,7 @@ public struct VisualActivityAnalyzer: Sendable {
             p01 = percentile(0.01); p99 = percentile(0.99)
             saturation = Double(sumChroma) / total
             r = Double(sumR) / total; g = Double(sumG) / total; b = Double(sumB) / total
-            sharpness = variance / (variance + Self.sharpnessReference)
+            sharpness = sharp
         }
 
         /// Per-field medians; a scene that changes mid-clip does not drag the clip's statistics the way a mean would.

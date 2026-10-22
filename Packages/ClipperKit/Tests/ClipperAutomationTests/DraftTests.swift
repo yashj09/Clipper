@@ -123,6 +123,38 @@ func talkingInput(seed: UInt64 = 7, title: String? = "Local editing in 60s") -> 
         #expect(abs(silent.segments[0].end - 1.1) < 1e-9)
     }
 
+    @Test func beatSnapNeverPassesTheMaxDurationNorEntersACutStretch() {
+        let clip = ClipInput(asset: videoAsset("broll", seconds: 10))
+        let segs = [Segment(clip: 0, start: 0, end: 1, words: [])]
+        let capped = Cutting.beatSnap(segs, beats: [0, 1.1], rule: BeatSnapRule(), clips: [clip], maxDuration: 1.0)
+        #expect(capped.moved == 0 && capped.segments == segs)
+        let room = Cutting.beatSnap(segs, beats: [0, 1.1], rule: BeatSnapRule(), clips: [clip], maxDuration: 1.2)
+        #expect(room.moved == 1 && abs(room.segments[0].end - 1.1) < 1e-9)
+        let cut = Cutting.beatSnap(segs, beats: [0, 1.1], rule: BeatSnapRule(), clips: [clip], excluded: [0: RangeSet(1.0..<1.3)])
+        #expect(cut.moved == 0 && cut.segments == segs)
+        let elsewhere = Cutting.beatSnap(segs, beats: [0, 1.1], rule: BeatSnapRule(), clips: [clip], excluded: [0: RangeSet(2.0..<2.3)])
+        #expect(elsewhere.moved == 1)
+    }
+
+    @Test(arguments: stride(from: 6.0, through: 20, by: 0.25).map { $0 })
+    func maxDurationHoldsAfterSnappingToTheBeat(cap: Double) {
+        var input = talkingInput()
+        input.settings.maxDuration = cap
+        #expect(input.template.rules.beatSnap != nil)
+        let tl = DraftPipeline.run(input).timeline
+        #expect(tl.tracks.first { $0.kind == .video }!.end.seconds <= cap + tl.canvas.frameRate.frameDuration.seconds)
+    }
+
+    @Test func wordsOnASpedUpItemKeepTheirPlace() {
+        let clip = videoAsset("speaker", seconds: 10)
+        let words = [SpokenWord(word: TranscriptWord(text: "one", start: 2.0, end: 2.4), cue: []),
+                     SpokenWord(word: TranscriptWord(text: "two", start: 3.0, end: 3.5), cue: [])]
+        let seg = Segment(clip: 0, start: 1, end: 5, words: words, speed: 2)
+        let item = Item(range: TimeRange(seconds: 10, 12), content: .media(MediaRef(asset: clip.id, source: TimeRange(seconds: 1, 5), speed: 2)))
+        let timed = Speech.timedWords([item], segments: [item.id: seg])
+        #expect(timed.map(\.start) == [10.5, 11] && timed.map(\.end) == [10.7, 11.25])
+    }
+
     @Test func fitDropsLowDensitySegmentsButKeepsTheHook() {
         var report = DraftReport()
         func words(_ n: Int, at t: Double) -> [SpokenWord] {
@@ -170,7 +202,7 @@ func talkingInput(seed: UInt64 = 7, title: String? = "Local editing in 60s") -> 
     }
 
     @Test func analysisKindsCoverWhatEachBuiltInReads() {
-        #expect(DraftPipeline.analysisKinds(for: BuiltIns.talkingHead) == [.speech, .transcript, .faces, .keywords, .color])
+        #expect(DraftPipeline.analysisKinds(for: BuiltIns.talkingHead) == [.speech, .transcript, .faces, .visual, .keywords, .color])
         #expect(DraftPipeline.analysisKinds(for: BuiltIns.talkingHead, slot: "broll") == [.transcript, .keywords, .visual, .color])
         #expect(DraftPipeline.analysisKinds(for: BuiltIns.gameplay) == [.speech, .transcript, .faces, .visual])
         #expect(DraftPipeline.analysisKinds(for: BuiltIns.gameplay, slot: "facecam") == [.speech, .transcript, .faces, .visual])

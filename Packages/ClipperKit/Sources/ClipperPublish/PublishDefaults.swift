@@ -21,16 +21,18 @@ public enum PublishDefaults {
 
     /// "0:00 Intro", "1:05 Setup", … in time order, or none when YouTube would reject the list. A first chapter within
     /// the first 10 s is moved to 0:00 (an intro that short couldn't be its own chapter); a later one gets an Intro
-    /// before it.
+    /// before it. A chapter that would run under 10 s is folded into the one before it (or dropped, at the end).
     static func chapterLines(_ markers: [Marker], duration: Double) -> [String] {
         var chapters = markers.filter { $0.name.hasPrefix(chapterMarkerPrefix) }.sorted { $0.time < $1.time }.map {
             (start: $0.time.seconds, title: String($0.name.dropFirst(chapterMarkerPrefix.count)).trimmingCharacters(in: .whitespaces))
         }
-        guard chapters.count >= minChapters else { return [] }
+        guard !chapters.isEmpty else { return [] }
         if chapters[0].start < minChapterSeconds { chapters[0].start = 0 } else { chapters.insert((0, "Intro"), at: 0) }
-        let ends = chapters.dropFirst().map(\.start) + [duration]
-        guard zip(chapters, ends).allSatisfy({ $1 - $0.start >= minChapterSeconds }) else { return [] }
-        return chapters.map { "\(timestamp($0.start)) \($0.title.isEmpty ? "Chapter" : $0.title)" }
+        var kept: [(start: Double, title: String)] = []
+        for chapter in chapters where chapter.start - (kept.last?.start ?? -minChapterSeconds) >= minChapterSeconds { kept.append(chapter) }
+        if let last = kept.last, duration - last.start < minChapterSeconds { kept.removeLast() }
+        guard kept.count >= minChapters else { return [] }
+        return kept.map { "\(timestamp($0.start)) \($0.title.isEmpty ? "Chapter" : $0.title)" }
     }
 
     /// "0:00", "12:34", "1:02:03".

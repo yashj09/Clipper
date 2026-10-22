@@ -21,7 +21,9 @@ import Testing
         let r = TemplateBuilder.make(from: tl, id: "my-talk", name: "My Talk", basedOn: BuiltIns.talkingHead)
         let t = r.template
         #expect(TemplateValidator.validate(t).isEmpty, "\(TemplateValidator.validate(t))")
-        #expect(t.slots.count == 1 && t.slots[0].id == "speaker" && t.slots[0].role == .primary && t.slots[0].fill == .sequence)
+        #expect(t.slots.map(\.id) == ["speaker", "broll"] && t.slots[0].role == .primary && t.slots[0].fill == .sequence)
+        #expect(t.slots[1] == BuiltIns.talkingHead.slots.first { $0.role == .broll } && t.rules.broll != nil)
+        #expect(t.rules.captions?.emoji == BuiltIns.talkingHead.rules.captions?.emoji && BuiltIns.talkingHead.rules.captions?.emoji == true)
         #expect(t.slots[0].transform == .fullFrame)                       // punch-ins/reframes stripped
         #expect(t.slots[0].reframe == .face)
         #expect(t.rules.captions?.style == "bold-pop")

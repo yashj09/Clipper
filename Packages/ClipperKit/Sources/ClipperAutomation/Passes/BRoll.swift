@@ -61,7 +61,7 @@ enum BRoll {
         var cursor = candidates.map(\.range.lowerBound)
         var starts: [Double] = []
         var out = Placement()
-        for w in words.sorted(by: { $0.start < $1.start }) where !w.isFiller {
+        for w in words.sorted(by: { $0.start < $1.start }) where !w.isFiller && !w.cue.contains(.profane) {
             guard let lemma = w.lemma else { continue }
             let scored = candidates.indices.compactMap { i in
                 strength(lemma, tokens[i]).map { (i, $0 + (uses[i] == 0 ? 0.5 : 0) - Double(uses[i])) }

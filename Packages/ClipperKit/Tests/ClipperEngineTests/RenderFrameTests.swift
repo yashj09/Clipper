@@ -26,8 +26,9 @@ import Testing
         return sum / n / 255
     }
 
-    @Test func frameHasTheTimelinesSizeAndItsCaption() async throws {
-        guard let a = Fixture.url("bg_1080x1920_60.mov"), let b = Fixture.url("overlay_1280x720_30.mov") else { return }
+    @Test(.enabled(if: Fixture.url("bg_1080x1920_60.mov") != nil && Fixture.url("overlay_1280x720_30.mov") != nil, "Fixtures not present"))
+    func frameHasTheTimelinesSizeAndItsCaption() async throws {
+        let a = try #require(Fixture.url("bg_1080x1920_60.mov")), b = try #require(Fixture.url("overlay_1280x720_30.mov"))
         let bg = try await MediaProbe.makeAsset(a), overlay = try await MediaProbe.makeAsset(b)
         let words = ["covers", "carry", "words"].enumerated().map {
             CaptionContent.Word(text: $0.element, start: RationalTime(seconds: Double($0.offset) * 0.3), end: RationalTime(seconds: Double($0.offset + 1) * 0.3))

@@ -93,6 +93,21 @@ func plays(_ t: Timeline, _ w: TranscriptWord) -> Bool {
         #expect(r.report.notes.contains { $0.hasPrefix("Trimmed to") && $0.hasSuffix("by dropping 1 low-importance sentence") })
     }
 
+    @Test func aSilentSegmentDoesNotSwitchImportanceTrimmingOff() {
+        func words(_ n: Int, at t: Double, importance: Double) -> [SpokenWord] {
+            Array(repeating: SpokenWord(word: TranscriptWord(text: "w", start: t, end: t + 0.2), cue: [], importance: importance), count: n)
+        }
+        let segs = [Segment(clip: 0, start: 0, end: 5, words: words(10, at: 1, importance: 0.9)),
+                    Segment(clip: 0, start: 6, end: 11, words: []),
+                    Segment(clip: 0, start: 12, end: 17, words: words(4, at: 13, importance: 0.2)),
+                    Segment(clip: 0, start: 18, end: 23, words: words(12, at: 19, importance: 0.8))]
+        #expect(Cutting.scored(segs))
+        var report = DraftReport()
+        let out = Cutting.fit(segs, maxDuration: 11, report: &report)
+        #expect(out.map(\.start) == [0, 18])
+        #expect(report.notes.contains { $0.hasSuffix("by dropping 1 low-importance sentence") })
+    }
+
     @Test func withoutABriefTrimmingGoesByDensity() {
         let total = segments(briefedInput(nil)).reduce(0) { $0 + $1.timelineDuration }
         let r = DraftPipeline.run(briefedInput(nil, maxDuration: total - 0.5))
@@ -153,6 +168,43 @@ func plays(_ t: Timeline, _ w: TranscriptWord) -> Bool {
     }
 }
 
+@Suite struct ColdOpenChapterTests {
+    @Test func chaptersFollowTheBodyNotTheHook() throws {
+        let words = briefedInput(nil).clips[0].analysis.transcript!.words
+        let sentences = Transcript.sentences(words)
+        var template = BuiltIns.talkingHead
+        template.rules.hook = HookRule()
+        let brief = TranscriptBrief(model: "m", hookSentence: 2, chapters: [
+            .init(start: words[0].start - 0.3, title: "Intro"), .init(start: words[sentences[2].lowerBound].start, title: "No cloud"),
+        ])
+        let t = DraftPipeline.run(briefedInput(brief, template: template)).timeline
+        let items = t.tracks[0].items
+        #expect(t.markers.map(\.name).dropFirst() == ["Chapter: Intro", "Chapter: No cloud"] && t.markers[0].name.hasPrefix("Hook: “There are"))
+        // "Intro" marks where the body starts after the jump, not the hook at 0; "No cloud" marks where the hook's
+        // chapter goes on (sentence 3), not the hook itself.
+        #expect(t.markers[1].time == items[1].start && items[1].start > .zero)
+        let body = try #require(items.first { item in
+            item.content.mediaRef.map { $0.source.start.seconds <= words[sentences[3].lowerBound].start && words[sentences[3].lowerBound].start < $0.source.end.seconds } ?? false
+        })
+        #expect(t.markers[2].time == body.start)
+        #expect(t.markers.allSatisfy { $0.origin.isAuto })
+    }
+
+    @Test func profanityIsMaskedInTheHook() throws {
+        var input = profaneInput(ProfanityRule())
+        input.template.rules.hook = HookRule(maxSeconds: 10, minImportance: 0)
+        input.clips[0].analysis.brief = TranscriptBrief(model: "m", hookSentence: 1)
+        var plan = SpeechPlan(clip: input.clips[0], rule: input.template.rules.speechEdits)
+        plan.markProfanity(locale: "en-US")
+        let segs = Cutting.segments(for: 0, clip: input.clips[0], rule: input.template.rules.silenceCut, plan: plan)
+        let open = try #require(Hook.coldOpen(segs, clips: input.clips, rule: input.template.rules.hook!))
+        #expect(open.text.hasSuffix("runs f****** locally.") && !open.text.contains("fucking"))
+        let r = DraftPipeline.run(input)
+        #expect(r.report.notes.contains { $0.hasPrefix("Cold open:") } && !r.report.notes.contains { $0.contains("fucking") })
+        #expect(r.timeline.markers.contains { $0.name.hasPrefix("Hook:") } && !r.timeline.markers.contains { $0.name.contains("fucking") })
+    }
+}
+
 @Suite struct KeywordTests {
     func tagged(_ tags: [KeywordTags.Tag]) -> ClipInput {
         var clip = briefedInput(nil).clips[0]
@@ -200,6 +252,20 @@ func plays(_ t: Timeline, _ w: TranscriptWord) -> Bool {
         #expect(items.compactMap { if case .text(let t) = $0.content { t.text } else { nil } } == ["49%", "pizza 🍕"])
         #expect(items[1].range.duration == RationalTime.frames(1.6, .fps30))
         #expect(items.allSatisfy { $0.origin == .auto(pass: "callouts") && $0.transform.position == .constant(NormPoint(0.5, 0.30)) })
+    }
+
+    @Test func anUnknownCalloutStyleWarnsAndChangesNothingElse() throws {
+        var input = briefedInput(nil)
+        input.clips[0].analysis.keywords = KeywordTags(tags: [.init(word: 22, kind: .noun, lemma: "subscription", emoji: "💸")])
+        input.template.rules.callouts = CalloutRule(style: "nope")
+        input.sfx = sfxAssets()
+        let r = DraftPipeline.run(input)
+        #expect(r.report.warnings.contains { $0.hasPrefix("Unknown callout style 'nope'") })
+        #expect(!r.timeline.tracks.contains { $0.name == "Callouts" })
+        let captions = try #require(r.timeline.tracks.first { $0.kind == .caption })
+        #expect(captions.items.contains { if case .caption(let c) = $0.content { c.text.contains("💸") } else { false } })
+        let pops = r.timeline.tracks.filter { $0.name == "SFX" }.flatMap(\.items).filter { $0.content.mediaRef?.asset == input.sfx[.pop]?.id }
+        #expect(pops.isEmpty)
     }
 
     @Test func talkingHeadDraftsGetACalloutTrack() throws {

@@ -29,5 +29,16 @@ import Testing
         #expect(picked[0].reasons.contains("caption") && !picked[1].reasons.contains("caption"))
         let all = TimelineCover.pick(timeline: timeline, analyses: analyses, count: 100)
         #expect(all.allSatisfy { $0.time >= 0.5 && !(4..<5).contains($0.time) })
+
+        // A full-frame B-roll cutaway over 5.5–7 s is what the viewer sees there: the captioned 6 s frame is out.
+        var covered = timeline
+        let cutaway = Item(range: TimeRange(seconds: 5.5, 7), content: .media(MediaRef(asset: UUID(), source: TimeRange(seconds: 0, 1.5))))
+        covered.tracks.insert(Track(kind: .overlay, items: [cutaway]), at: 1)
+        let picked2 = TimelineCover.pick(timeline: covered, analyses: analyses, count: 100)
+        #expect(!picked2.contains { (5.5..<7).contains($0.time) })
+        #expect(picked2.contains { $0.time == 2 })
+        var hidden = covered
+        hidden.tracks[1].hidden = true
+        #expect(TimelineCover.pick(timeline: hidden, analyses: analyses, count: 3).map(\.time) == [6, 2])
     }
 }

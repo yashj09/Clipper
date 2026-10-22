@@ -72,6 +72,9 @@ public struct MediaAsset: Codable, Sendable, Equatable, Identifiable {
 
     /// The file to render from at full quality.
     public var renderURL: URL { playableURL ?? url }
+
+    /// Media the user brought in, as opposed to the music and sound effects drafts add to the library.
+    public var isUserMedia: Bool { !tags.contains("music") && !tags.contains("sfx") }
 }
 
 public enum MusicLicense: Codable, Sendable, Equatable {

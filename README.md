@@ -42,7 +42,8 @@ clipper captions translate "3 tips" --to es,fr     # on-device translated captio
 clipper music generate "upbeat lo-fi, warm keys" --duration 60  # local AI music (optional worker, ACE-Step)
 clipper watch ~/Movies/OBS --template gameplay --export         # auto-draft new recordings
 clipper draft -t talking-head take.mov --llm ollama --model qwen3.5:9b --brief   # title, hook, chapters from a local LLM
-clipper draft -t talking-head take.mov --slot broll=desk.mov --broll-tag b-roll   # cutaways from your own clips
+clipper tag desk.mov office.mov b-roll                                            # mark library clips as cutaway material
+clipper draft -t talking-head take.mov --broll-tag b-roll                         # cutaways from your own clips
 clipper cover "3 tips" -o cover.jpg                 # best frame of the edit, captions included
 clipper publish now "3 tips" --dry-run              # description with chapters and hashtags, nothing posted
 ```

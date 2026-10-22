@@ -79,10 +79,7 @@ enum LLMResponseParser {
     }
 
     static func int(_ v: Any?) -> Int? {
-        if let n = v as? NSNumber {
-            let d = n.doubleValue
-            return d.isFinite && d == d.rounded() ? Int(d) : nil
-        }
+        if let n = v as? NSNumber { return Int(exactly: n.doubleValue) }
         guard let s = v as? String else { return nil }
         // "3", "#3", "c3", "candidate 3"
         guard let digits = s.split(whereSeparator: { !$0.isNumber }).first else { return nil }

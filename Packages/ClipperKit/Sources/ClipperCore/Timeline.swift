@@ -458,12 +458,25 @@ public struct DraftRecord: Codable, Sendable, Equatable {
     }
 }
 
-/// A named point on the timeline.
+/// A named point on the timeline. A re-draft replaces `.auto` markers and keeps the user's.
 public struct Marker: Codable, Sendable, Equatable, Identifiable {
     public var id: UUID
     public var time: RationalTime
     public var name: String
-    public init(id: UUID = UUID(), time: RationalTime, name: String = "") { self.id = id; self.time = time; self.name = name }
+    public var origin: Origin
+    public init(id: UUID = UUID(), time: RationalTime, name: String = "", origin: Origin = .user) {
+        self.id = id; self.time = time; self.name = name; self.origin = origin
+    }
+
+    enum CodingKeys: String, CodingKey { case id, time, name, origin }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        time = try c.decode(RationalTime.self, forKey: .time)
+        name = try c.decode(String.self, forKey: .name)
+        origin = try c.decodeIfPresent(Origin.self, forKey: .origin) ?? .user
+    }
 }
 
 /// What a draft knows about the video for publishing (from the transcript brief), beyond its name.

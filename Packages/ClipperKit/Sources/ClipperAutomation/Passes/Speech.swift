@@ -137,14 +137,14 @@ enum Speech {
         var pauseAfter: Double
     }
 
-    /// Splits words into sentences at end punctuation or at a pause longer than `maxGap`.
+    /// Splits words into sentences at end punctuation (`Transcript.endsSentence`) or at a pause longer than `maxGap`.
     static func sentences(_ words: [TranscriptWord], maxGap: Double = 0.8) -> [Sentence] {
         var out: [Sentence] = []
         var first = 0
         for (i, w) in words.enumerated() {
             let next = i + 1 < words.count ? words[i + 1] : nil
             let gap = next.map { $0.start - w.end } ?? .infinity
-            if w.text.last.map({ ".?!".contains($0) }) == true || gap > maxGap || next == nil {
+            if Transcript.endsSentence(w.text, next: next?.text) || gap > maxGap || next == nil {
                 out.append(Sentence(start: words[first].start, end: w.end, words: Array(words[first...i]), indices: first..<(i + 1),
                                     pauseBefore: 0, pauseAfter: gap))
                 first = i + 1
@@ -159,7 +159,7 @@ enum Speech {
         text.lowercased().trimmingCharacters(in: .punctuationCharacters.union(.symbols).union(.whitespaces))
     }
 
-    static func endsSentence(_ text: String) -> Bool { text.last.map { ".?!".contains($0) } ?? false }
+    static func endsSentence(_ text: String) -> Bool { Transcript.endsSentence(text) }
 
     /// Short words people stutter on. A doubled word outside this list is usually meant ("go go go").
     static let functionWords: Set<String> = [
@@ -288,19 +288,22 @@ enum Speech {
                               "Retake: kept take \(r.take + 1) of \(r.takes) · removed \(removed) (\(clip.asset.name))"))
             }
         }
-        return found.sorted { $0.time < $1.time }.map { Marker(id: ids.uuid(), time: $0.time, name: $0.name) }
+        return found.sorted { $0.time < $1.time }.map { Marker(id: ids.uuid(), time: $0.time, name: $0.name, origin: .auto(pass: "markers")) }
     }
 
     /// One marker per chapter of each speech clip's brief, where the chapter's first moment plays on the timeline.
     /// A chapter starts at its first word's transcribed start, which runs early, so a start up to a second before kept
     /// footage marks where that footage begins. Chapters that start further into cut material, or within 3 s of the
-    /// chapter marker before, get none.
-    static func chapterMarkers(_ plans: [Int: SpeechPlan], clips: [ClipInput], items: [Item], rate: FrameRate) -> [(time: RationalTime, name: String)] {
+    /// chapter marker before, get none. `items` are the body of the video, without a cold open: a chapter that starts
+    /// inside the hook sentence (`hook`, source seconds of one clip) is marked where its body goes on after the jump.
+    static func chapterMarkers(_ plans: [Int: SpeechPlan], clips: [ClipInput], items: [Item], rate: FrameRate,
+                               hook: (clip: Int, source: ClosedRange<Double>)? = nil) -> [(time: RationalTime, name: String)] {
         var found: [(time: RationalTime, name: String)] = []
         for i in plans.keys.sorted() {
             let clip = clips[i]
             for chapter in clip.analysis.brief?.chapters ?? [] {
-                let t = chapter.start
+                var t = chapter.start
+                if let hook, hook.clip == i, hook.source.contains(t) { t = hook.source.upperBound }
                 guard let item = items.filter({ $0.content.mediaRef.map { $0.asset == clip.asset.id && $0.source.end.seconds > t } ?? false })
                     .min(by: { $0.content.mediaRef!.source.start < $1.content.mediaRef!.source.start }),
                       let ref = item.content.mediaRef, ref.source.start.seconds - t <= 1 else { continue }
@@ -313,16 +316,16 @@ enum Speech {
         return kept
     }
 
-    /// Words on the timeline with their cues, from each primary item's segment.
+    /// Words on the timeline with their cues, from each primary item's segment, at the item's playback speed.
     static func timedWords(_ items: [Item], segments: [ItemID: Segment]) -> [TimedWord] {
         var out: [TimedWord] = []
         for item in items {
             guard let seg = segments[item.id], let ref = item.content.mediaRef else { continue }
-            let offset = item.start.seconds - ref.source.start.seconds
             let a = ref.source.start.seconds, b = ref.source.end.seconds
+            func timeline(_ source: Double) -> Double { item.start.seconds + (source - a) / ref.speed }
             for w in seg.words where w.start >= a - 0.02 && w.end <= b + 0.02 {
-                out.append(TimedWord(text: w.text, start: max(w.start + offset, item.start.seconds),
-                                     end: min(w.end + offset, item.end.seconds), isFiller: w.isFiller, cue: w.cue, emoji: w.emoji, lemma: w.lemma))
+                out.append(TimedWord(text: w.text, start: max(timeline(w.start), item.start.seconds),
+                                     end: min(timeline(w.end), item.end.seconds), isFiller: w.isFiller, cue: w.cue, emoji: w.emoji, lemma: w.lemma))
             }
         }
         return out

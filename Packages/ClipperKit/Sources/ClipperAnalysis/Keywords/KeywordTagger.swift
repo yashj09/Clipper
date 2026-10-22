@@ -9,7 +9,7 @@ public enum KeywordTagger {
     static let stopNouns: Set<String> = [
         "thing", "stuff", "kind", "sort", "part", "someone", "something", "anything", "everything", "nothing",
         "everyone", "anyone", "somebody", "nobody", "people", "guy", "bunch", "point", "fact", "case", "yeah",
-        "okay", "today", "lot", "way",
+        "okay", "today", "lot", "way", "thank", "thanks",
     ]
 
     static let nameKinds: [NLTag: KeywordTags.Kind] = [
@@ -66,15 +66,18 @@ public enum KeywordTagger {
             guard !bare.isEmpty else { continue }
             let lemma = (lemmas[i] ?? bare).lowercased()
             let emoji = KeywordEmoji.table[lemma]
+            let shouted = isShouted(w.text), exclaimed = w.text.hasSuffix("!")
             let kind: KeywordTags.Kind? =
                 if bare.contains(where: \.isNumber) || lexical[i] == .number { .number }
                 // Before names: the tagger reads a shouted "INSANE!" as an organization.
-                else if w.text.hasSuffix("!") { .emphasis }
+                else if shouted && exclaimed { .emphasis }
                 else if let name = names[i].flatMap({ nameKinds[$0] }) { name }
-                else if isShouted(w.text) { .emphasis }
+                else if shouted { .emphasis }
                 // Short nouns ("car", "dog") only when they have an emoji, else "bit", "end" and the like flood in.
                 else if lexical[i] == .noun, !stopNouns.contains(lemma),
                         bare.count(where: \.isLetter) >= 4 || emoji != nil { .noun }
+                // "dollars!" keeps its noun; a bare exclaimed word is delivery alone.
+                else if exclaimed { .emphasis }
                 else { nil }
             if let kind { tags.append(.init(word: i, kind: kind, lemma: lemma, emoji: emoji)) }
         }

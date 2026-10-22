@@ -168,9 +168,11 @@ enum Cutting {
         }
     }
 
-    /// Whether the brief scores all the speech here, so trimming can go by importance. Fast pauses never have words.
+    /// Whether the brief scores all the speech here, so trimming can go by importance. Fast pauses never have words,
+    /// and a silent segment (B-roll footage in the primary) has nothing to score: it ranks under every sentence,
+    /// as it does by density.
     static func scored<C: Collection<Segment>>(_ segments: C) -> Bool {
-        segments.contains { $0.importance != nil } && segments.allSatisfy { $0.speed != 1 || $0.importance != nil }
+        segments.contains { $0.importance != nil } && segments.allSatisfy { $0.speed != 1 || !$0.hasSpeech || $0.importance != nil }
     }
 
     /// Drops segments (never the first: it carries the hook) until the total fits, then trims the last segment at a
@@ -190,7 +192,7 @@ enum Cutting {
         while total > maxDuration, segs.count > 1 {
             guard let worst = segs.indices.dropFirst().min(by: { rank($0) < rank($1) }) else { break }
             total -= segs[worst].timelineDuration
-            if segs[worst].speed == 1 { droppedSpeech += 1 }
+            if segs[worst].hasSpeech { droppedSpeech += 1 }
             segs.remove(at: worst)
             dropped += 1
         }
@@ -214,9 +216,10 @@ enum Cutting {
     /// Moves each cut, and the final end, onto the nearest timeline beat when it is within `rule.tolerance`, by moving
     /// the end of the segment before it. Earlier moves shift later cuts, so each cut is measured after the previous
     /// snap. A cut stays put rather than cross a word, leave the clip, or overlap the next piece of the same clip.
-    /// Both ends of a fast pause stay put: moving one would open a gap in footage that plays straight through.
-    static func beatSnap(_ segments: [Segment], beats: [Double], rule: BeatSnapRule,
-                         clips: [ClipInput]) -> (segments: [Segment], moved: Int) {
+    /// Both ends of a fast pause stay put: moving one would open a gap in footage that plays straight through. A cut
+    /// never moves into source the plan cut out (`excluded`, by clip), and the final end never passes `maxDuration`.
+    static func beatSnap(_ segments: [Segment], beats: [Double], rule: BeatSnapRule, clips: [ClipInput],
+                         excluded: [Int: RangeSet<Double>] = [:], maxDuration: Double? = nil) -> (segments: [Segment], moved: Int) {
         var segs = segments
         var moved = 0
         var cut = 0.0
@@ -226,6 +229,7 @@ enum Cutting {
             guard let beat = beats.min(by: { abs($0 - cut) < abs($1 - cut) }) else { break }
             let delta = beat - cut
             guard delta != 0, abs(delta) <= rule.tolerance else { continue }
+            if k + 1 == segs.count, let maxDuration, beat > maxDuration + 1e-9 { continue }
             let seg = segs[k]
             let clip = clips[seg.clip]
             let words = clip.analysis.transcript?.words ?? []
@@ -234,7 +238,8 @@ enum Cutting {
             if k + 1 < segs.count, segs[k + 1].clip == seg.clip, segs[k + 1].start >= seg.end { limit = min(limit, segs[k + 1].start) }
             let lo = min(seg.end, newEnd), hi = max(seg.end, newEnd)
             guard newEnd <= limit, newEnd - seg.start >= 0.1,
-                  !words.contains(where: { $0.start < hi && $0.end > lo }) else { continue }
+                  !words.contains(where: { $0.start < hi && $0.end > lo }),
+                  excluded[seg.clip]?.isDisjoint(RangeSet(lo..<hi)) ?? true else { continue }
             segs[k].end = newEnd
             segs[k].words = seg.words.filter { $0.end <= newEnd + 0.05 }
             cut += delta

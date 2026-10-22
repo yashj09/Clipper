@@ -92,7 +92,7 @@ final class AppModel {
 
     func refresh() {
         guard let library else { return }
-        assets = ((try? library.assets()) ?? []).filter { !$0.tags.contains("music") }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        assets = ((try? library.assets()) ?? []).filter(\.isUserMedia).sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
         projects = (try? library.projects()) ?? []
         music = (try? library.music()) ?? []
         templates = BuiltIns.templates + ((try? library.userTemplates()) ?? [])
@@ -188,42 +188,56 @@ final class AppModel {
     func makeDraft(_ request: DraftRequest) async -> DraftResult? {
         guard let library else { return nil }
         var request = request
+        // Candidates the user never asked for: a missing or unreadable one is skipped, never a failed draft.
+        var unasked: Set<AssetID> = []
         if settings.automation.autoBRoll, request.template.rules.broll != nil,
            let slot = request.template.slots.first(where: { $0.role == .broll }), (request.slots[slot.id] ?? []).isEmpty {
             let asked = Set(request.primary + request.slots.values.joined())
-            request.slots[slot.id] = assets.filter { $0.isBRoll && !asked.contains($0.id) }.map(\.id)
+            let candidates = assets.filter { $0.isBRoll && !asked.contains($0.id) && FileManager.default.fileExists(atPath: $0.url.path) }
+            request.slots[slot.id] = candidates.map(\.id)
+            unasked = Set(candidates.map(\.id))
         }
         let byID = allAssets
         let primary = request.primary.compactMap { byID[$0] }
         let others = request.slots.flatMap { slot, ids in ids.compactMap { byID[$0] }.map { ($0, slot) } }
-        let all = primary.map { ($0, nil as String?) } + others.map { ($0.0, Optional($0.1)) }
+        var all = primary.map { ($0, nil as String?) } + others.map { ($0.0, Optional($0.1)) }
         guard !primary.isEmpty else { alert = "Add at least one clip to the \(request.template.primarySlot?.name ?? "main") slot."; return nil }
 
         let pipeline = AnalysisPipeline(cache: library.analysisCache,
                                         options: AnalysisOptions(locale: Locale(identifier: settings.automation.transcriptionLocale)))
         var analysis: [AssetID: AssetAnalysis] = [:]
-        do {
-            for (i, (asset, slot)) in all.enumerated() where analysis[asset.id] == nil {
-                let kinds = draftKinds(request.template, slot: slot)
-                activity = Activity(title: "Analyzing", detail: "\(i + 1)/\(all.count) \(asset.name)", progress: Double(i) / Double(all.count))
+        var warnings: [String] = []
+        let total = all.count
+        for (i, (asset, slot)) in all.enumerated() where analysis[asset.id] == nil {
+            let kinds = draftKinds(request.template, slot: slot)
+            activity = Activity(title: "Analyzing", detail: "\(i + 1)/\(total) \(asset.name)", progress: Double(i) / Double(total))
+            do {
                 analysis[asset.id] = try await pipeline.analyze(asset, kinds: kinds.filter { k in
                     (k != .speech && k != .transcript) || asset.info.hasAudio
                 }) { kind, fraction in
-                    Task { @MainActor in self.activity?.detail = "\(i + 1)/\(all.count) \(asset.name) — \(kind.rawValue) \(Int(fraction * 100))%" }
+                    Task { @MainActor in self.activity?.detail = "\(i + 1)/\(total) \(asset.name) — \(kind.rawValue) \(Int(fraction * 100))%" }
                 }
+            } catch where unasked.contains(asset.id) {
+                warnings.append("Skipped B-roll \(asset.name): \(error)")
+            } catch {
+                activity = nil
+                alert = "Analysis failed: \(error)"
+                return nil
             }
-        } catch {
-            activity = nil
-            alert = "Analysis failed: \(error)"
-            return nil
         }
+        all.removeAll { asset, _ in unasked.contains(asset.id) && analysis[asset.id] == nil }
+        // Only the main clips' briefs shape the draft (title, hook, trimming, chapters).
         if let endpoint = llmEndpoint, await LocalLLM(endpoint: endpoint).isAvailable() {
             let briefer = TranscriptBriefer(endpoint: endpoint, cache: library.analysisCache)
-            for (asset, _) in all {
+            for (asset, slot) in all where slot == nil {
                 guard let transcript = analysis[asset.id]?.transcript, !transcript.words.isEmpty else { continue }
                 activity = Activity(title: "Briefing", detail: "\(asset.name) with \(endpoint.model)")
-                // The brief is optional: a slow or confused model must not cost the user their draft.
-                analysis[asset.id]?.brief = try? await briefer.brief(transcript, key: asset.key, context: asset.name)
+                // The brief is optional: a slow or confused model must not cost the user their draft, but they hear of it.
+                do {
+                    analysis[asset.id]?.brief = try await briefer.brief(transcript, key: asset.key, context: asset.name)
+                } catch {
+                    warnings.append("No brief from \(endpoint.model) for \(asset.name): \(error)")
+                }
             }
         }
 
@@ -241,7 +255,8 @@ final class AppModel {
                                                        captions: request.captions, music: request.music,
                                                        maxDuration: request.maxDuration, musicID: request.musicID, name: name),
                                sfx: Self.soundEffects(in: library))
-        let result = DraftPipeline.run(input)
+        var result = DraftPipeline.run(input)
+        result.report.warnings = warnings + result.report.warnings
         do {
             for asset in result.addedAssets { _ = try await library.importMedia([asset.url], mode: .reference) { _ in asset } }
         } catch {
@@ -259,12 +274,10 @@ final class AppModel {
     }
 
     private func draftKinds(_ template: Template, slot: String? = nil) -> Set<AnalysisKind> {
-        var kinds = DraftPipeline.analysisKinds(for: template, slot: slot).filter { $0 != .faces || settings.automation.faceTracking }
-        if kinds.contains(.transcript) { kinds.insert(.keywords) }
-        return kinds
+        DraftPipeline.analysisKinds(for: template, slot: slot).filter { $0 != .faces || settings.automation.faceTracking }
     }
 
-    /// The local LLM from Settings, when the user turned it on.
+    /// The local LLM from Settings, when the user turned it on: it briefs every draft and ranks highlights.
     private var llmEndpoint: LLMEndpoint? {
         guard settings.automation.useLLM, let url = URL(string: settings.automation.llmBaseURL) else { return nil }
         return LLMEndpoint(baseURL: url, model: settings.automation.llmModel)

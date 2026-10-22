@@ -55,7 +55,8 @@ private func session() -> URLSession { URLSession(configuration: .ephemeral) }
         #expect(title.count <= 60 && !title.contains("\"") && !title.contains("🔥") && !title.contains("🚀"))
         #expect(title.hasPrefix("Why this camera"))
         #expect(b.hookSentence == 2)
-        #expect(b.sentenceImportance == [1, 0, 0.5, 0])
+        // Three scores for four sentences: the missing one gets the median, not a skippable zero.
+        #expect(b.sentenceImportance == [1, 0, 0.5, 0.5])
         #expect(b.chapters == [.init(start: 0, title: "Intro"), .init(start: 6, title: "The test")])
         #expect(b.description == "A review of a camera.")
         #expect(b.hashtags == ["camera", "videogear", "a", "b", "c", "d", "e", "f"])
@@ -67,6 +68,22 @@ private func session() -> URLSession { URLSession(configuration: .ephemeral) }
         #expect(reqs[0].sentenceIDs == [0, 1, 2, 3])
         #expect(reqs[0].userMessage.contains("A camera review") && reqs[0].userMessage.contains("exactly 4 importance"))
         #expect(!reqs[0].userMessage.contains("end0. word1x0"))
+    }
+
+    @Test func aMissingOrShortImportanceListScoresNothing() {
+        #expect(TranscriptBriefer.importances([], count: 4).isEmpty)
+        #expect(TranscriptBriefer.importances([0.9, 0.1], count: 4).isEmpty)
+        #expect(TranscriptBriefer.importances([0.9, 0.1, 0.4], count: 4) == [0.9, 0.1, 0.4, 0.4])
+        #expect(TranscriptBriefer.importances([0.9, 0.1, 0.4, 0.2, 0.8], count: 4) == [0.9, 0.1, 0.4, 0.2])
+        #expect(TranscriptBriefer.importances(Array(repeating: 0.3, count: 36), count: 40) == Array(repeating: 0.3, count: 40))
+        #expect(TranscriptBriefer.importances(Array(repeating: 0.3, count: 35), count: 40).isEmpty)
+    }
+
+    @Test func idsBeyondIntNeverTrap() {
+        #expect(LLMResponseParser.int(NSNumber(value: 1e20)) == nil)
+        #expect(LLMResponseParser.int(NSNumber(value: 2.5)) == nil)
+        #expect(LLMResponseParser.int(NSNumber(value: 3.0)) == 3)
+        #expect(TranscriptBriefer.reply(#"{"title":"t","hook":1e20,"importance":[]}"#, requiring: ["title"])?.hook == nil)
     }
 
     @Test func longTranscriptsAreChunkedAtTheWordBudget() async throws {

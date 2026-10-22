@@ -27,8 +27,8 @@ public struct Transcript: Codable, Sendable, Equatable {
     }
     public var text: String { words.map(\.text).joined(separator: " ") }
 
-    /// Sentences as ranges of `words`: one ends after a word ending in ".", "?" or "!", or where the next non-filler
-    /// word starts 0.8 s or more after it. Everything that numbers sentences uses this split, so a sentence index
+    /// Sentences as ranges of `words`: one ends after a word that `endsSentence`, or where the next non-filler word
+    /// starts 0.8 s or more after it. Everything that numbers sentences uses this split, so a sentence index
     /// (`TranscriptBrief.hookSentence`) means the same words everywhere.
     public static func sentences(_ words: [TranscriptWord]) -> [Range<Int>] {
         var out: [Range<Int>] = []
@@ -36,13 +36,30 @@ public struct Transcript: Codable, Sendable, Equatable {
         for i in words.indices {
             let next = words[(i + 1)...].first { !$0.isFiller }
             let gap = next.map { $0.start - words[i].end } ?? 0
-            if words[i].text.last.map({ ".?!".contains($0) }) == true || gap >= 0.8 {
+            let following = i + 1 < words.count ? words[i + 1].text : nil
+            if endsSentence(words[i].text, next: following) || gap >= 0.8 {
                 out.append(start..<(i + 1))
                 start = i + 1
             }
         }
         if start < words.count { out.append(start..<words.count) }
         return out
+    }
+
+    /// Titles and other abbreviations a transcriber writes with a period mid-sentence.
+    static let abbreviations: Set<String> = [
+        "mr", "mrs", "ms", "dr", "prof", "sr", "jr", "st", "mt", "vs", "e.g", "i.e", "approx", "dept", "inc", "ltd",
+    ]
+
+    /// Whether `text` ends a sentence: it ends in ".", "?" or "!", and the period is not an abbreviation's ("Dr.",
+    /// "e.g."), an initial's ("J.") or one the next word carries on from in lowercase ("wait... what").
+    public static func endsSentence(_ text: String, next: String? = nil) -> Bool {
+        guard let last = text.last, ".?!".contains(last) else { return false }
+        guard last == "." else { return true }
+        let bare = text.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: ".,;:\"'“”‘’()[]"))
+        if abbreviations.contains(bare) || (bare.count == 1 && bare.first!.isLetter) { return false }
+        if let first = next?.first(where: \.isLetter), first.isLowercase { return false }
+        return true
     }
 }
 

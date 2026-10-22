@@ -109,7 +109,8 @@ public enum DraftPipeline {
                 if let m = music, m.beats != nil {
                     musicOffset = Music.startOffset(m, alignToBeat: true)
                     let beats = Music.timelineBeats(m, offset: musicOffset, until: total + snapRule.tolerance)
-                    let snap = Cutting.beatSnap(segments, beats: beats, rule: snapRule, clips: input.clips)
+                    let snap = Cutting.beatSnap(segments, beats: beats, rule: snapRule, clips: input.clips,
+                                                excluded: plans.mapValues(\.excluded), maxDuration: maxDuration)
                     segments = snap.segments
                     if snap.moved > 0 {
                         report.notes.append(String(format: "Snapped %d of %d cuts to the beat", snap.moved, segments.count))
@@ -170,12 +171,17 @@ public enum DraftPipeline {
         }
         // A quick flash after the cold open marks it as a deliberate jump, not a glitch in the edit.
         var hookCut: Double?
+        var hookSource: (clip: Int, source: ClosedRange<Double>)?
+        var bodyItems = primaryItems
         if let open = coldOpen, open.count < segments.count,
            let i = primaryItems.firstIndex(where: { segmentOf[$0.id] == segments[open.count] }) {
             primaryItems[i].transition = Transition(.dipToWhite, duration: RationalTime.frames(0.15, rate))
             hookCut = primaryItems[i].start.seconds
+            let hook = segments[..<open.count]
+            hookSource = (hook[0].clip, hook.map(\.start).min()!...hook.map(\.end).max()!)
+            bodyItems = Array(primaryItems[i...])
         }
-        let chapters = Speech.chapterMarkers(plans, clips: input.clips, items: primaryItems, rate: rate)
+        let chapters = Speech.chapterMarkers(plans, clips: input.clips, items: bodyItems, rate: rate, hook: hookSource)
         if let rule = rules.transitions {
             let t = Visual.transitions(primaryItems, cuts: cuts, chapters: chapters.map(\.time), rule: rule, rate: rate)
             primaryItems = t.items
@@ -284,7 +290,14 @@ public enum DraftPipeline {
         }
 
         // 4. Captions. A word with a callout shows its emoji there, not twice.
-        let callouts = rules.callouts.map { Visual.calloutWords(spoken, rule: $0, duration: duration.seconds) } ?? []
+        var callouts: [TimedWord] = []
+        if let rule = rules.callouts {
+            if styles[rule.style] != nil {
+                callouts = Visual.calloutWords(spoken, rule: rule, duration: duration.seconds)
+            } else {
+                report.warnings.append("Unknown callout style '\(rule.style)': no callouts")
+            }
+        }
         let calledOut = Set(callouts.map(\.start))
         let captionWords = spoken.map { w in
             var w = w
@@ -402,10 +415,10 @@ public enum DraftPipeline {
         // Drawn last so no earlier ID depends on how many retakes there were.
         timeline.markers = Speech.takeMarkers(plans, clips: input.clips, items: primaryItems, rate: rate, ids: &ids)
         if let open = coldOpen {
-            timeline.markers.append(Marker(id: ids.uuid(), time: .zero, name: "Hook: “\(Hook.excerpt(open.text))”"))
+            timeline.markers.append(Marker(id: ids.uuid(), time: .zero, name: "Hook: “\(Hook.excerpt(open.text))”", origin: .auto(pass: "markers")))
         }
         for chapter in chapters {
-            timeline.markers.append(Marker(id: ids.uuid(), time: chapter.time, name: chapter.name))
+            timeline.markers.append(Marker(id: ids.uuid(), time: chapter.time, name: chapter.name, origin: .auto(pass: "markers")))
         }
         timeline.markers.sort { $0.time < $1.time }
 
@@ -434,8 +447,9 @@ public enum DraftPipeline {
     public static func analysisKinds(for template: Template, slot: String? = nil) -> Set<AnalysisKind> {
         let rules = template.rules
         let isCandidate = { (s: Slot) in s.role == .broll && rules.broll != nil }
+        // Face framing falls back to the salient region when no face is found, so it reads both.
         func framing(_ slots: [Slot]) -> Set<AnalysisKind> {
-            Set(slots.compactMap { s in s.reframe == .face ? .faces : s.reframe == .saliency ? .visual : nil })
+            Set(slots.flatMap { s -> [AnalysisKind] in s.reframe == .face ? [.faces, .visual] : s.reframe == .saliency ? [.visual] : [] })
         }
         if let s = template.slots.first(where: { $0.id == slot }), isCandidate(s) {
             return framing([s]).union([.transcript, .keywords]).union(rules.color != nil ? [.color] : [])

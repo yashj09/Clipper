@@ -5,7 +5,7 @@ import Testing
 @testable import ClipperEngine
 
 @Suite struct SoundEffectsTests {
-    static let lengths: [SoundEffect: Double] = [.whoosh: 0.35, .pop: 0.07, .click: 0.012, .ding: 0.6, .bleep: 0.25]
+    static let lengths: [SoundEffect: Double] = [.whoosh: 0.35, .pop: 0.07, .click: 0.012, .ding: 0.6, .bleep: 2.0]
 
     func read(_ url: URL) throws -> (rate: Double, channels: Int, bits: Int, samples: [Float]) {
         let file = try AVAudioFile(forReading: url)
@@ -24,7 +24,8 @@ import Testing
         var dates: [SoundEffect: Date] = [:]
         for effect in SoundEffect.allCases {
             let asset = try #require(assets[effect])
-            #expect(asset.url == dir.appending(path: "\(effect.rawValue).wav"))
+            #expect(asset.url == dir.appending(path: "\(effect.rawValue)-v\(SoundEffects.version).wav"))
+            #expect(asset.key.rawValue == "sfx-\(effect.rawValue)-v\(SoundEffects.version)")
             #expect(asset.tags == ["sfx"] && asset.info.kind == .audio && asset.info.audioSampleRate == 48_000)
             let (rate, channels, bits, samples) = try read(asset.url)
             #expect(rate == 48_000 && channels == 1 && bits == 16)
@@ -45,12 +46,23 @@ import Testing
         #expect(again == assets)
         let popDate = try FileManager.default.attributesOfItem(atPath: assets[.pop]!.url.path)[.modificationDate] as? Date
         #expect(popDate == Date(timeIntervalSince1970: 1_000_000))
-        #expect(try FileManager.default.contentsOfDirectory(atPath: dir.path).sorted() == ["bleep.wav", "click.wav", "ding.wav", "pop.wav", "whoosh.wav"])
+        #expect(try FileManager.default.contentsOfDirectory(atPath: dir.path).sorted() == ["bleep", "click", "ding", "pop", "whoosh"].map { "\($0)-v\(SoundEffects.version).wav" })
 
         // Deterministic: a deleted file comes back byte for byte.
         let original = try Data(contentsOf: assets[.whoosh]!.url)
         try FileManager.default.removeItem(at: assets[.whoosh]!.url)
         _ = try SoundEffects.ensure(in: dir)
         #expect(try Data(contentsOf: assets[.whoosh]!.url) == original)
+    }
+
+    @Test func aSecondWriterOfTheSameFileIsNotAnError() throws {
+        let dir = FileManager.default.temporaryDirectory.appending(path: "sfx-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appending(path: "pop.wav", directoryHint: .notDirectory)
+        let samples = SoundEffects.render(.pop)
+        try SoundEffects.write(samples, to: url)
+        try SoundEffects.write(samples, to: url)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: dir.path) == ["pop.wav"])
     }
 }

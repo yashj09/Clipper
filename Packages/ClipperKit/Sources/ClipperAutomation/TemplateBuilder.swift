@@ -62,6 +62,11 @@ public enum TemplateBuilder {
             notes.append("No media in the timeline: added an empty main slot")
             slots.append(Slot(id: "main", name: "Main", role: .primary))
         }
+        // A B-roll slot holds candidates for cutaways the draft may not have made; with the rule kept, the slot stays.
+        if basedOn?.rules.broll != nil, let candidates = basedOn?.slots.first(where: { $0.role == .broll }),
+           !usedIDs.contains(candidates.id) {
+            slots.append(candidates)
+        }
 
         // MARK: Elements (titles, branding, solids, images)
         var elements: [TemplateElement] = []
@@ -103,7 +108,9 @@ public enum TemplateBuilder {
         let captionItems = timeline.tracks.filter { $0.kind == .caption && !$0.hidden }.flatMap(\.items)
         let captionStyles = captionItems.compactMap { i -> String? in if case .caption(let c) = i.content { c.style } else { nil } }
         if let style = mostCommon(captionStyles) {
-            rules.captions = CaptionRule(style: style)
+            var captions = rules.captions ?? CaptionRule(style: style)
+            captions.style = style
+            rules.captions = captions
             styleNames.insert(style)
         } else if rules.captions != nil {
             rules.captions = nil

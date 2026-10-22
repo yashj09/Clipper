@@ -1,6 +1,8 @@
 import AVFoundation
 @testable import ClipperAnalysis
 import ClipperCore
+import CoreImage
+import CoreImage.CIFilterBuiltins
 import ClipperEngine
 import CoreGraphics
 import Foundation
@@ -279,7 +281,13 @@ private final class CountingCache: AnalysisCache {
 
         let checker = frame { x, y in (x + y) % 2 == 0 ? (0, 0, 0) : (255, 255, 255) }
         let ramp = frame { x, _ in let v = UInt8(x * 4); return (v, v, v) }
-        #expect(checker.sharpness > 0.99 && ramp.sharpness < 0.05)
+        #expect(checker.sharpness > 0.95 && ramp.sharpness < 0.05)
+
+        // Focus, not detail: one crisp edge in a flat frame reads sharp, and the same edge defocused reads soft.
+        let edge = frame { x, _ in x < 32 ? (60, 60, 60) : (200, 200, 200) }
+        let soft = frame { x, _ in let v = UInt8(130 + 70 * tanh((Double(x) - 31.5) / 2)); return (v, v, v) }
+        #expect(edge.sharpness > 0.6, "edge \(edge.sharpness)")
+        #expect(soft.sharpness < edge.sharpness / 2, "soft \(soft.sharpness) vs edge \(edge.sharpness)")
         #expect(checker.p01 == 0 && checker.p99 == 1)
 
         let stats = VisualActivityAnalyzer.FrameMeasure.median([grey, red, checker])
@@ -345,6 +353,24 @@ private final class CountingCache: AnalysisCache {
         #expect(progress.withLock { $0 } == 1)
     }
 
+    /// A flat frame with one crisp marker is a sharp shot; the same frame defocused is one to cut.
+    @Test(.enabled(if: SignalMedia.has("rotated_marker.mov"), "Fixtures/rotated_marker.mov not present"))
+    func aDefocusedFrameReadsSoftAndAFlatSharpOneDoesNot() async throws {
+        let url = try #require(SignalMedia.fixture("rotated_marker.mov"))
+        let generator = VisualActivityAnalyzer.makeGenerator(asset: AVURLAsset(url: url), maximumSize: 256, tolerance: 0.5)
+        let image = try await generator.image(at: CMTime(seconds: 1, preferredTimescale: 600)).image
+        let sharp = try #require(VisualActivityAnalyzer.FrameMeasure(image))
+        let blur = CIFilter.gaussianBlur()
+        blur.inputImage = CIImage(cgImage: image).clampedToExtent()
+        blur.radius = 6
+        let output = try #require(blur.outputImage)
+        let blurred = try #require(CIContext().createCGImage(output, from: CIImage(cgImage: image).extent))
+        let soft = try #require(VisualActivityAnalyzer.FrameMeasure(blurred))
+        print("rotated_marker sharpness: sharp \(sharp.sharpness), blurred \(soft.sharpness)")
+        #expect(sharp.sharpness >= BadShotRule().minSharpness && soft.sharpness < BadShotRule().minSharpness)
+        #expect(abs(sharp.luma - soft.luma) < 0.02)
+    }
+
     /// rotated_marker.mov stores a red marker in the natural top-left and is tagged rotate-90°-clockwise:
     /// sampled images must be upright (portrait, marker top-right) and saliency must point there.
     @Test(.enabled(if: SignalMedia.has("rotated_marker.mov"), "Fixtures/rotated_marker.mov not present"))
@@ -372,6 +398,8 @@ private final class CountingCache: AnalysisCache {
         print("rotated_marker salient: \(activity.samples.map { $0.salient.map { String(format: "(%.2f, %.2f, %.2f×%.2f)", $0.x, $0.y, $0.width, $0.height) } ?? "nil" })")
         #expect(activity.samples.count == 3)
         #expect(activity.samples.allSatisfy { ($0.sharpness ?? -1) >= 0 && ($0.sharpness ?? 2) <= 1 && ($0.luma ?? -1) > 0 })
+        // A flat frame with one crisp marker is a sharp shot, not a blurry one to cut.
+        #expect(activity.samples.allSatisfy { ($0.sharpness ?? 0) >= BadShotRule().minSharpness }, "\(activity.samples.map { $0.sharpness ?? -1 })")
         #expect(activity.sceneCuts.isEmpty)
         let salient = activity.samples.compactMap(\.salient)
         #expect(!salient.isEmpty)
