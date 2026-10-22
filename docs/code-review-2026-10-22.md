@@ -370,3 +370,12 @@ Fixed in the working tree after this review. Verification after the fixes: `swif
 | 27 | Fixed | `timedWords` honours clip speed |
 | 28 | Fixed | Brief cache id digests the model and sentence start times; multi-chunk hook limited to candidates; `beatSnap` never enters excluded source; Sendable warning gone. Not changed: keywords cache lifetime (uncertain), nested-object reply (not a defect) |
 | 29 | Partly | Tests added for 2, 3, 4, 6, 7, 8, 9, 15, 17, 18, 19, 20, 21, 22, 24, 25, 27 and the render test now reports itself skipped without fixtures. DTD validation and the OpenTimelineIO read remain opt-in |
+
+## Verification of the fixes (2026-10-22, later)
+
+Independent pass over the working tree: build clean, 550 tests, app build, e2e 5/5, CLI smoke of `tag`, `--broll-tag`, `info` and `publish now --dry-run --description="-…"`. Probes found two gaps, fixed in the commit after the review fixes with a test each:
+
+- Finding 18's fix read `segs[first - 1]` in `Hook.coldOpen` without checking `first > 0`: a filler-only hook sentence at segment 0 (reachable with `removeFillers` off) trapped. It now leaves the draft alone, as any hook that already opens it.
+- Finding 3's fix moved a chapter that starts on the hook to the hook's end but kept the rule that kept footage must start within 1 s of it, so a pause over a second after the hook still dropped the chapter. The body's first kept footage after the hook now takes it whatever the pause was.
+
+Noted, not changed: markers saved before `Marker.origin` existed decode as the user's, so the first re-draft of such a draft keeps its old automatic markers beside the new ones; `Transcript.endsSentence` treats a lone letter before a period as an initial, so "… did I." no longer ends a sentence.

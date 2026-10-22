@@ -302,11 +302,12 @@ enum Speech {
         for i in plans.keys.sorted() {
             let clip = clips[i]
             for chapter in clip.analysis.brief?.chapters ?? [] {
-                var t = chapter.start
-                if let hook, hook.clip == i, hook.source.contains(t) { t = hook.source.upperBound }
+                var t = chapter.start, slack = 1.0
+                // The body goes on at the first kept footage after the hook, however long the pause there was.
+                if let hook, hook.clip == i, hook.source.contains(t) { t = hook.source.upperBound; slack = .infinity }
                 guard let item = items.filter({ $0.content.mediaRef.map { $0.asset == clip.asset.id && $0.source.end.seconds > t } ?? false })
                     .min(by: { $0.content.mediaRef!.source.start < $1.content.mediaRef!.source.start }),
-                      let ref = item.content.mediaRef, ref.source.start.seconds - t <= 1 else { continue }
+                      let ref = item.content.mediaRef, ref.source.start.seconds - t <= slack else { continue }
                 let offset = max(0, t - ref.source.start.seconds) / ref.speed
                 found.append((RationalTime.frames(item.start.seconds + offset, rate), "Chapter: \(chapter.title)"))
             }

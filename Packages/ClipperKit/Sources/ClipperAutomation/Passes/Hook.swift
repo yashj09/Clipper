@@ -22,7 +22,7 @@ enum Hook {
         let speaksHook: (Segment) -> Bool = { s in s.clip == clip && s.words.contains { $0.sentence == hook } }
         let onlyHook: (Segment) -> Bool = { s in speaksHook(s) && s.words.allSatisfy { $0.sentence == hook } }
         guard let first = segs.firstIndex(where: speaksHook), let last = segs.lastIndex(where: speaksHook),
-              first != segs.firstIndex(where: \.hasSpeech) else { return nil }
+              first > 0, first != segs.firstIndex(where: \.hasSpeech) else { return nil }
         let run = segs[first...last]
         guard run.allSatisfy({ onlyHook($0) || ($0.speed != 1 && $0.words.isEmpty) }),
               run.reduce(0, { $0 + $1.timelineDuration }) <= rule.maxSeconds,
