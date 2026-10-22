@@ -190,6 +190,30 @@ func plays(_ t: Timeline, _ w: TranscriptWord) -> Bool {
         #expect(t.markers.allSatisfy { $0.origin.isAuto })
     }
 
+    @Test func aChapterOnTheHookSurvivesALongPauseAfterIt() throws {
+        // Sentence 1 as the hook; the 1.6 s pause after it is cut, so the body goes on well over a second later.
+        // One chapter only: the test sentences are too close for two to be 3 s apart.
+        let words = briefedInput(nil).clips[0].analysis.transcript!.words
+        let sentences = Transcript.sentences(words)
+        var template = BuiltIns.talkingHead
+        template.rules.hook = HookRule(maxSeconds: 10, minImportance: 0)
+        let brief = TranscriptBrief(model: "m", hookSentence: 1,
+                                    chapters: [.init(start: words[sentences[1].lowerBound].start, title: "Second")])
+        let t = DraftPipeline.run(briefedInput(brief, template: template)).timeline
+        let second = try #require(t.markers.first { $0.name == "Chapter: Second" })
+        let plays = try #require(t.tracks[0].items.first { $0.start == second.time }?.content.mediaRef)
+        #expect(plays.source.start.seconds <= words[sentences[2].lowerBound].start && words[sentences[2].lowerBound].start < plays.source.end.seconds)
+    }
+
+    @Test func aFillerOnlyHookThatAlreadyOpensTheDraftIsLeftAlone() {
+        var clip = ClipInput(asset: videoAsset("speaker", seconds: 10))
+        clip.analysis.brief = TranscriptBrief(model: "m", hookSentence: 0)
+        let um = SpokenWord(word: TranscriptWord(text: "Um.", start: 0.1, end: 0.4, isFiller: true), cue: [], sentence: 0)
+        let hi = SpokenWord(word: TranscriptWord(text: "Hello.", start: 1.0, end: 1.4), cue: [], sentence: 1)
+        let segs = [Segment(clip: 0, start: 0, end: 0.5, words: [um]), Segment(clip: 0, start: 0.9, end: 1.5, words: [hi])]
+        #expect(Hook.coldOpen(segs, clips: [clip], rule: HookRule(maxSeconds: 10, minImportance: 0)) == nil)
+    }
+
     @Test func profanityIsMaskedInTheHook() throws {
         var input = profaneInput(ProfanityRule())
         input.template.rules.hook = HookRule(maxSeconds: 10, minImportance: 0)
